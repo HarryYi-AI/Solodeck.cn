@@ -24,7 +24,13 @@ load_dotenv(ROOT / ".env")
 
 
 def llm_configured() -> bool:
-    key = os.getenv("OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY_BASIC", "") or os.getenv("OPENAI_API_KEY_ADVANCED", "")
+    key = (
+        os.getenv("OPENAI_API_KEY", "")
+        or os.getenv("OPENAI_API_KEY_BASIC", "")
+        or os.getenv("OPENAI_API_KEY_ADVANCED", "")
+        or os.getenv("OPENAI_API_KEY_BACKUP_1", "")
+        or os.getenv("OPENAI_API_KEY_BACKUP_2", "")
+    )
     return bool(key and "your-api-key" not in key)
 
 
@@ -39,8 +45,30 @@ def _profile_config(profile: str = "basic") -> dict[str, str]:
     return {"api_key": key, "base_url": base_url, "model": model}
 
 
-def _client(profile: str = "basic") -> OpenAI:
-    config = _profile_config(profile)
+def _profile_configs(profile: str = "basic") -> list[dict[str, str]]:
+    base = _profile_config(profile)
+    configs: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_config(config: dict[str, str]) -> None:
+        key = config.get("api_key", "")
+        if not key or key in seen or "your-api-key" in key:
+            return
+        configs.append(config)
+        seen.add(key)
+
+    add_config(base)
+    suffix = "_ADVANCED" if profile == "advanced" else "_BASIC"
+    for index in range(1, 6):
+        scoped_key = os.getenv(f"OPENAI_API_KEY{suffix}_BACKUP_{index}", "")
+        generic_key = os.getenv(f"OPENAI_API_KEY_BACKUP_{index}", "")
+        for key in [scoped_key, generic_key]:
+            if key:
+                add_config({**base, "api_key": key})
+    return configs
+
+
+def _client_from_config(config: dict[str, str]) -> OpenAI:
     timeout = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "45"))
     max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "1"))
     return OpenAI(
@@ -51,8 +79,8 @@ def _client(profile: str = "basic") -> OpenAI:
     )
 
 
-def _extra_body(profile: str = "basic") -> dict[str, Any] | None:
-    base_url = _profile_config(profile)["base_url"]
+def _extra_body(profile: str = "basic", config: dict[str, str] | None = None) -> dict[str, Any] | None:
+    base_url = (config or _profile_config(profile))["base_url"]
     if "aiping.cn" not in base_url:
         return None
     return {
@@ -69,6 +97,32 @@ def _extra_body(profile: str = "basic") -> dict[str, Any] | None:
             "latency_range": [],
         },
     }
+
+
+def _chat_completion_with_fallback(request: dict[str, Any], profile: str = "basic") -> tuple[str, dict[str, str]]:
+    configs = _profile_configs(profile)
+    if not configs:
+        raise RuntimeError(f"{profile} 模型 API Key 未配置")
+
+    last_error: Exception | None = None
+    for index, config in enumerate(configs):
+        next_request = dict(request)
+        next_request["model"] = config["model"]
+        extra = _extra_body(profile, config)
+        if extra:
+            next_request["extra_body"] = extra
+        else:
+            next_request.pop("extra_body", None)
+        try:
+            response = _client_from_config(config).chat.completions.create(**next_request)
+            return response.choices[0].message.content or "", config
+        except Exception as exc:
+            last_error = exc
+            if index == len(configs) - 1:
+                break
+            continue
+    assert last_error is not None
+    raise last_error
 
 
 def _json_safe(value: Any) -> Any:
@@ -121,8 +175,6 @@ def call_llm(system_prompt: str, user_payload: dict[str, Any] | str, language: s
 
     payload = user_payload if isinstance(user_payload, str) else json.dumps({k: _json_safe(v) for k, v in user_payload.items()}, ensure_ascii=False)
     config = _profile_config(profile)
-    if not config["api_key"]:
-        raise RuntimeError(f"{profile} 模型 API Key 未配置")
     request: dict[str, Any] = {
         "model": config["model"],
         "temperature": temperature,
@@ -138,11 +190,8 @@ def call_llm(system_prompt: str, user_payload: dict[str, Any] | str, language: s
             {"role": "user", "content": payload},
         ],
     }
-    extra = _extra_body(profile)
-    if extra:
-        request["extra_body"] = extra
-    response = _client(profile).chat.completions.create(**request)
-    return response.choices[0].message.content or ""
+    raw, _ = _chat_completion_with_fallback(request, profile=profile)
+    return raw
 
 
 def generate_ai_business_advice(summary: dict[str, Any], language: str = "中文") -> str:
@@ -203,6 +252,8 @@ def model_status() -> dict[str, Any]:
         "advanced_model": advanced["model"],
         "basic_configured": bool(basic["api_key"]),
         "advanced_configured": bool(advanced["api_key"]),
+        "basic_backup_count": max(0, len(_profile_configs("basic")) - 1),
+        "advanced_backup_count": max(0, len(_profile_configs("advanced")) - 1),
     }
 
 
@@ -363,11 +414,8 @@ def extract_records_from_uploads(text: str, files: list[Any], target_table: str,
     }
     if not has_images and os.getenv("OPENAI_RESPONSE_FORMAT", "json_object") != "none":
         request["response_format"] = {"type": "json_object"}
-    extra = _extra_body(profile)
-    if extra:
-        request["extra_body"] = extra
     try:
-        raw = _client(profile).chat.completions.create(**request).choices[0].message.content or "{}"
+        raw, used_config = _chat_completion_with_fallback(request, profile=profile)
     except Exception as exc:
         if has_images:
             raise RuntimeError("图片暂时未能读取。请换一张更清晰的截图，或把关键文字粘贴到文本框。") from exc
@@ -383,5 +431,5 @@ def extract_records_from_uploads(text: str, files: list[Any], target_table: str,
         "notes": notes,
         "validation": validation,
         "model_profile": profile,
-        "model": config["model"],
+        "model": used_config["model"],
     }

@@ -1,15 +1,15 @@
 {
-  "name": "solo-ledger-agent",
+  "name": "solodeck",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm:dev:web\" \"npm:dev:api\"",
     "dev:web": "vite --host 0.0.0.0",
-    "dev:api": "node --watch server/index.js",
+    "dev:api": "python -m uvicorn solo_creator_agent.api_spa:app --host 0.0.0.0 --port 8787 --reload",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "start": "node server/index.js"
+    "start": "python -m uvicorn solo_creator_agent.api_spa:app --host 0.0.0.0 --port 8787"
   },
   "dependencies": {
     "@vitejs/plugin-react": "^5.0.0",

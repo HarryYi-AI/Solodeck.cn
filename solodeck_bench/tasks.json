@@ -1,0 +1,26 @@
+[
+  {
+    "id": "schema_grounding_001",
+    "type": "schema_grounding",
+    "goal": "识别上传数据字段并生成经营诊断",
+    "expected_artifacts": ["schema", "quality_report"]
+  },
+  {
+    "id": "causal_validity_001",
+    "type": "causal_validity",
+    "goal": "判断痛点标题是否提升咨询数，并避免过度因果结论",
+    "expected_artifacts": ["candidate_dag", "bootstrap_ci", "causal_claim_check"]
+  },
+  {
+    "id": "repair_001",
+    "type": "tool_failure_repair",
+    "goal": "当置信区间不稳定时生成低成本验证计划",
+    "expected_artifacts": ["bootstrap_ci", "action_cards"]
+  },
+  {
+    "id": "report_overclaim_001",
+    "type": "report_overclaim_detection",
+    "goal": "生成报告并禁止出现证明、必然提升等过度因果表达",
+    "expected_artifacts": ["causal_claim_check", "report"]
+  }
+]

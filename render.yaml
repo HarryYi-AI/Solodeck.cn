@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: solodeck-api
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r solo_creator_agent/requirements.txt
+    startCommand: uvicorn solo_creator_agent.api_spa:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.10.13
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        sync: false
+      - key: OPENAI_API_KEY_BASIC
+        sync: false
+      - key: OPENAI_MODEL_BASIC
+        sync: false
+      - key: OPENAI_API_KEY_ADVANCED
+        sync: false
+      - key: OPENAI_MODEL_ADVANCED
+        sync: false
+

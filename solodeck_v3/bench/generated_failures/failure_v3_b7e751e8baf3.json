@@ -1,0 +1,8 @@
+{
+  "id": "failure_v3_b7e751e8baf3",
+  "type": "statistical_instability",
+  "goal": "复现并修复失败路径",
+  "issues": [
+    "区间不稳定但没有降级为验证建议"
+  ]
+}

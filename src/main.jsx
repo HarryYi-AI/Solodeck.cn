@@ -1,407 +1,650 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import {
-  AlertTriangle,
-  ArrowDownToLine,
-  BarChart3,
-  CheckCircle2,
-  CircleDollarSign,
-  ClipboardList,
-  FileSpreadsheet,
-  Lightbulb,
-  Loader2,
-  Plus,
-  ReceiptText,
-  Search,
-  Upload,
-  WalletCards
-} from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Legend,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis
-} from "recharts";
-import * as XLSX from "xlsx";
+import { ArrowRight, CheckCircle2, FileUp, Loader2, PauseCircle, Rocket, ShieldCheck, UploadCloud } from "lucide-react";
 import "./styles.css";
 
-const seedEntries = [
-  {
-    date: "2026-05-18",
-    direction: "income",
-    amount: 12800,
-    counterparty: "南枝品牌",
-    category: "品牌顾问",
-    channel: "银行转账",
-    project: "品牌定位月包",
-    invoiceStatus: "已开票",
-    note: "月包首款",
-    confidence: 0.96
-  },
-  {
-    date: "2026-05-20",
-    direction: "expense",
-    amount: 1380,
-    counterparty: "广告投放平台",
-    category: "广告投放",
-    channel: "支付宝",
-    project: "品牌定位月包",
-    invoiceStatus: "待补票",
-    note: "获客测试预算",
-    confidence: 0.9
-  },
-  {
-    date: "2026-05-21",
-    direction: "receivable",
-    amount: 5200,
-    counterparty: "北岸咨询",
-    category: "咨询尾款",
-    channel: "银行转账",
-    project: "增长咨询月包",
-    invoiceStatus: "未开票",
-    note: "预计 5 月底回款",
-    confidence: 0.84
-  }
+const pages = [
+  { id: "upload", label: "上传数据", icon: FileUp },
+  { id: "diagnose", label: "经营诊断", icon: ShieldCheck },
+  { id: "decision", label: "决策检查", icon: CheckCircle2 },
+  { id: "agent", label: "图谱与因果", icon: ArrowRight },
+  { id: "actions", label: "行动计划", icon: ArrowRight }
 ];
 
-const seedActions = [
-  {
-    level: "high",
-    title: "北岸咨询尾款进入催收窗口",
-    detail: "5200 元应收款尚未到账，建议今天发送付款提醒，并同步开票信息。"
-  },
-  {
-    level: "medium",
-    title: "广告投放费用需要补票",
-    detail: "1380 元广告支出缺少发票，建议本周内补齐，避免月底集中整理。"
-  },
-  {
-    level: "low",
-    title: "品牌定位月包客户贡献突出",
-    detail: "南枝品牌贡献本月主要收入，可优先维护交付节奏和复购机会。"
-  }
+const questions = [
+  { id: "pain_point_title", label: "痛点标题是否提升咨询" },
+  { id: "platform_conversion", label: "哪个平台更适合转化" },
+  { id: "series_continue", label: "这个系列是否继续" },
+  { id: "favorite_to_product", label: "高收藏内容是否值得产品化" }
 ];
 
-const directionText = {
-  income: "收入",
-  expense: "支出",
-  receivable: "应收"
+const cache = new Map();
+const displayMap = {
+  platform: "平台",
+  title_style: "标题风格",
+  topic: "主题",
+  series_id: "内容系列",
+  consultations: "咨询数",
+  conversions: "成交数",
+  revenue: "收入",
+  favorite_rate: "收藏率",
+  pain_point: "痛点型",
+  tutorial: "教程型",
+  tiktok: "TikTok",
+  douyin: "抖音",
+  bilibili: "B站",
+  xiaohongshu: "小红书",
+  wechat: "公众号/视频号",
+  zhihu: "知乎",
+  "Continue": "继续放大",
+  "Reduce-Pause": "减少投入",
+  "Validate Next Week": "下周验证"
 };
 
-const levelText = {
-  high: "紧急",
-  medium: "关注",
-  low: "建议"
-};
-
-function money(value) {
-  return new Intl.NumberFormat("zh-CN", {
-    style: "currency",
-    currency: "CNY",
-    maximumFractionDigits: 0
-  }).format(value || 0);
+function cn(value) {
+  return displayMap[value] || value || "";
 }
 
-function buildSummary(entries) {
-  const income = entries.filter((item) => item.direction === "income").reduce((sum, item) => sum + item.amount, 0);
-  const expense = entries.filter((item) => item.direction === "expense").reduce((sum, item) => sum + item.amount, 0);
-  const receivable = entries.filter((item) => item.direction === "receivable").reduce((sum, item) => sum + item.amount, 0);
-  const missingInvoices = entries.filter((item) => ["未开票", "待补票"].includes(item.invoiceStatus)).length;
-  const clientMap = new Map();
-  const categoryMap = new Map();
+function actionIcon(type) {
+  const label = cn(type);
+  if (label === "继续放大") return Rocket;
+  if (label === "减少投入") return PauseCircle;
+  return CheckCircle2;
+}
 
-  entries.forEach((item) => {
-    if (item.direction === "income" || item.direction === "receivable") {
-      clientMap.set(item.counterparty, (clientMap.get(item.counterparty) || 0) + item.amount);
-    }
-    if (item.direction === "expense") {
-      categoryMap.set(item.category, (categoryMap.get(item.category) || 0) + item.amount);
-    }
+function formatNumber(value) {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value || 0);
+}
+
+function percent(value) {
+  return `${((value || 0) * 100).toFixed(2)}%`;
+}
+
+function ciStatus(effect) {
+  const low = Number(effect?.ci_95?.[0] || 0);
+  const high = Number(effect?.ci_95?.[1] || 0);
+  if (low > 0) return { level: "good", title: "结果较稳", detail: "整个区间都高于 0，可以考虑小幅放大。" };
+  if (high < 0) return { level: "bad", title: "可能无效", detail: "整个区间都低于 0，建议暂停或换变量验证。" };
+  return { level: "watch", title: "先验证", detail: "区间穿过 0，说明结果还不够稳定，不适合直接放大。" };
+}
+
+async function apiPost(path, body) {
+  const key = `${path}:${JSON.stringify(body || {})}`;
+  if (cache.has(key)) return cache.get(key);
+  const promise = fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  }).then(async (res) => {
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "请求失败");
+    return data;
   });
-
-  const topClient = [...clientMap.entries()].sort((a, b) => b[1] - a[1])[0];
-  const topExpense = [...categoryMap.entries()].sort((a, b) => b[1] - a[1])[0];
-
-  return {
-    income,
-    expense,
-    net: income - expense,
-    receivable,
-    missingInvoices,
-    topClient: topClient ? `${topClient[0]} ${money(topClient[1])}` : "待识别",
-    topExpense: topExpense ? `${topExpense[0]} ${money(topExpense[1])}` : "暂无支出"
-  };
+  cache.set(key, promise);
+  return promise;
 }
 
-function App() {
+function Trace({ trace }) {
+  useEffect(() => {
+    if (trace?.length) {
+      window.__SOLODECK_TRACE__ = trace;
+    }
+  }, [trace]);
+  return null;
+}
+
+function prefetchAnalysis(datasetId, questionId) {
+  if (!datasetId) return;
+  apiPost("/api/diagnose", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
+  apiPost("/api/decision", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
+  apiPost("/api/full-agent", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
+  apiPost("/api/v3-agent", { dataset_id: datasetId, task: "评估内容策略增量，生成可验证的下一步行动。" }).catch(() => {});
+  apiPost("/api/action-plan", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
+}
+
+function Sidebar({ page, setPage, collapsed, setCollapsed }) {
+  return (
+    <>
+      <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-label="切换侧栏">
+        {collapsed ? "☰" : "×"}
+      </button>
+      <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+        <div className="brand">
+          <span className="logo" />
+          <div>
+            <strong>SoloDeck</strong>
+            <small>Northstar Labs</small>
+          </div>
+        </div>
+        <p className="side-copy">把数据变成下一步可执行计划。</p>
+        <nav>
+          {pages.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                className={page === item.id ? "active" : ""}
+                onClick={() => setPage(item.id)}
+              >
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
+    </>
+  );
+}
+
+function UploadPage({ datasetId, setDatasetId, setMapping, setPage }) {
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
-  const [entries, setEntries] = useState(seedEntries);
-  const [actions, setActions] = useState(seedActions);
+  const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState("当前为示例数据。上传截图或表格后可生成新的台账。");
-  const [query, setQuery] = useState("");
+  const [notice, setNotice] = useState("");
 
-  const filteredEntries = useMemo(() => {
-    const keyword = query.trim().toLowerCase();
-    if (!keyword) return entries;
-    return entries.filter((item) => Object.values(item).join(" ").toLowerCase().includes(keyword));
-  }, [entries, query]);
-
-  const summary = useMemo(() => buildSummary(entries), [entries]);
-
-  const categoryData = useMemo(() => {
-    const map = new Map();
-    entries.filter((item) => item.direction === "expense").forEach((item) => {
-      map.set(item.category, (map.get(item.category) || 0) + item.amount);
-    });
-    return [...map.entries()].map(([name, value]) => ({ name, value }));
-  }, [entries]);
-
-  const flowData = useMemo(() => [
-    { name: "收入", amount: summary.income },
-    { name: "支出", amount: summary.expense },
-    { name: "应收", amount: summary.receivable }
-  ], [summary]);
-
-  async function analyzeFiles(selectedFiles) {
-    if (!selectedFiles.length) return;
-
+  async function upload(selected) {
+    if (!selected.length && !text.trim()) return;
     setLoading(true);
-    setNotice("正在分析上传资料，识别金额、客户、票据状态和行动建议。");
-
-    const formData = new FormData();
-    selectedFiles.forEach((file) => formData.append("files", file));
-
+    setNotice("正在映射字段，不会在前台暴露原始数据。");
+    const form = new FormData();
+    selected.forEach((file) => form.append("files", file));
+    form.append("text", text);
     try {
-      const response = await fetch("/api/analyze", {
-        method: "POST",
-        body: formData
-      });
-      const payload = await response.json();
-      const data = payload.fallback || payload;
-
-      if (!response.ok && !payload.fallback) {
-        throw new Error(payload.detail || payload.error || "分析失败");
-      }
-
-      setEntries(data.entries || []);
-      setActions(data.actions || []);
-      setNotice(data.message || (data.source === "llm" ? "已通过大模型完成识别与经营建议生成。" : "已生成演示识别结果。"));
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "上传失败");
+      setDatasetId(data.dataset_id);
+      setMapping(data.mapping);
+      cache.clear();
+      setNotice("已完成字段映射，可以进入经营诊断。");
+      setTimeout(() => setPage("diagnose"), 450);
     } catch (error) {
-      setNotice(`分析失败：${error.message}`);
+      setNotice(error.message);
     } finally {
       setLoading(false);
     }
   }
 
-  function onFilesChange(event) {
-    const selected = [...event.target.files];
-    setFiles(selected);
-    analyzeFiles(selected);
-  }
-
-  function exportWorkbook() {
-    const rows = entries.map((item) => ({
-      日期: item.date,
-      类型: directionText[item.direction],
-      金额: item.amount,
-      交易对象: item.counterparty,
-      分类: item.category,
-      渠道: item.channel,
-      关联项目: item.project,
-      票据状态: item.invoiceStatus,
-      备注: item.note,
-      置信度: item.confidence
-    }));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), "经营台账");
-    XLSX.writeFile(workbook, "SoloLedger-经营台账.xlsx");
-  }
-
   return (
-    <main className="app-shell">
-      <section className="topbar">
+    <section className="page">
+      <header className="page-head">
         <div>
-          <div className="brand-row">
-            <WalletCards size={28} />
-            <span>SoloLedger</span>
-          </div>
-          <h1>一人公司经营台账 Agent</h1>
-          <p>把支付截图、订单、发票和表格变成收支台账、经营看板与今日行动建议。</p>
+          <span className="eyebrow">上传</span>
+          <h1>上传创作者经营数据</h1>
+          <p>支持 CSV / Excel。系统只展示映射摘要和经营结论，不展示原始明细。</p>
         </div>
-        <div className="topbar-actions">
-          <button className="ghost-button" type="button" onClick={() => inputRef.current?.click()}>
-            <Plus size={18} />
-            上传资料
-          </button>
-          <button className="primary-button" type="button" onClick={exportWorkbook}>
-            <ArrowDownToLine size={18} />
-            导出 Excel
-          </button>
-        </div>
-      </section>
+      </header>
 
-      <section className="workspace">
-        <aside className="upload-panel">
-          <div className="panel-title">
-            <Upload size={20} />
-            <span>资料入口</span>
-          </div>
-          <button className="dropzone" type="button" onClick={() => inputRef.current?.click()}>
-            {loading ? <Loader2 className="spin" size={34} /> : <FileSpreadsheet size={34} />}
-            <strong>{loading ? "AI 正在整理台账" : "上传截图 / 发票 / Excel"}</strong>
-            <span>支持微信、支付宝、订单截图、发票图片、收支表。未配置 key 时自动使用演示数据。</span>
-          </button>
-          <input
-            ref={inputRef}
-            className="file-input"
-            type="file"
-            multiple
-            accept="image/*,.pdf,.xlsx,.xls,.csv"
-            onChange={onFilesChange}
-          />
-          <div className="file-list">
-            {files.length ? files.map((file) => (
-              <div className="file-chip" key={`${file.name}-${file.size}`}>
-                <ReceiptText size={16} />
-                <span>{file.name}</span>
-              </div>
-            )) : (
-              <div className="empty-file">等待上传经营碎片资料</div>
-            )}
-          </div>
-          <div className="notice">
-            <CheckCircle2 size={18} />
-            <span>{notice}</span>
-          </div>
-        </aside>
+      <div className="upload-card" onClick={() => inputRef.current?.click()}>
+        {loading ? <Loader2 className="spin" size={34} /> : <UploadCloud size={38} />}
+        <strong>{loading ? "正在处理" : "点击上传 CSV / Excel"}</strong>
+        <span>内容表现、收入、用户反馈、对照实验都可以上传。</span>
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept=".csv,.xlsx,.xls"
+          onChange={(event) => {
+            const selected = [...event.target.files];
+            setFiles(selected);
+            upload(selected);
+          }}
+        />
+      </div>
 
-        <section className="main-panel">
-          <div className="metric-grid">
-            <Metric icon={CircleDollarSign} label="本月收入" value={money(summary.income)} tone="green" />
-            <Metric icon={WalletCards} label="本月支出" value={money(summary.expense)} tone="coral" />
-            <Metric icon={BarChart3} label="净收入" value={money(summary.net)} tone="ink" />
-            <Metric icon={AlertTriangle} label="应收未收" value={money(summary.receivable)} tone="amber" />
-            <Metric icon={ReceiptText} label="票据缺口" value={`${summary.missingInvoices} 笔`} tone="coral" />
-            <Metric icon={ClipboardList} label="高价值客户" value={summary.topClient} tone="green" />
-          </div>
+      <div className="file-row">
+        {files.length ? files.map((file) => <span key={file.name}>{file.name}</span>) : <span>未上传时使用内置演示数据。</span>}
+      </div>
 
-          <div className="insight-grid">
-            <section className="chart-panel">
-              <div className="section-head">
-                <h2>经营概览</h2>
-                <span>{summary.topExpense}</span>
-              </div>
-              <ResponsiveContainer width="100%" height={240}>
-                <BarChart data={flowData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip formatter={(value) => money(value)} />
-                  <Bar dataKey="amount" radius={[8, 8, 0, 0]}>
-                    {flowData.map((item) => (
-                      <Cell key={item.name} fill={item.name === "收入" ? "#2c9468" : item.name === "支出" ? "#d85b48" : "#e3a72f"} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </section>
+      <div className="panel text-panel">
+        <h3>也可以直接粘贴文字</h3>
+        <p>适合后台摘要、用户反馈、商单记录、复盘笔记。系统会抽取关键词并进入知识图谱。</p>
+        <textarea
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="例如：小红书咨询很多但成交慢，用户反馈价格不清楚；B站长视频收藏高，适合做课程入口。"
+        />
+        <button className="primary-btn" onClick={() => upload(files)}>读取文字并分析</button>
+      </div>
 
-            <section className="chart-panel">
-              <div className="section-head">
-                <h2>支出结构</h2>
-                <span>自动分类</span>
-              </div>
-              <ResponsiveContainer width="100%" height={240}>
-                <PieChart>
-                  <Pie data={categoryData} dataKey="value" nameKey="name" innerRadius={58} outerRadius={88} paddingAngle={4}>
-                    {categoryData.map((item, index) => (
-                      <Cell key={item.name} fill={["#d85b48", "#2c9468", "#e3a72f", "#44546a", "#4f8c8d"][index % 5]} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value) => money(value)} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </section>
-          </div>
-
-          <section className="table-section">
-            <div className="section-head">
-              <h2>经营台账</h2>
-              <label className="search-box">
-                <Search size={16} />
-                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索客户、项目、分类" />
-              </label>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>日期</th>
-                    <th>类型</th>
-                    <th>金额</th>
-                    <th>交易对象</th>
-                    <th>分类</th>
-                    <th>项目</th>
-                    <th>票据</th>
-                    <th>置信度</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredEntries.map((item, index) => (
-                    <tr key={`${item.date}-${item.counterparty}-${index}`}>
-                      <td>{item.date}</td>
-                      <td><span className={`tag ${item.direction}`}>{directionText[item.direction]}</span></td>
-                      <td>{money(item.amount)}</td>
-                      <td>{item.counterparty}</td>
-                      <td>{item.category}</td>
-                      <td>{item.project}</td>
-                      <td>{item.invoiceStatus}</td>
-                      <td>{Math.round((item.confidence || 0) * 100)}%</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </section>
-
-        <aside className="action-panel">
-          <div className="panel-title">
-            <Lightbulb size={20} />
-            <span>今日行动 Agent</span>
-          </div>
-          <div className="action-list">
-            {actions.map((action, index) => (
-              <article className={`action-item ${action.level}`} key={`${action.title}-${index}`}>
-                <div className="action-level">{levelText[action.level] || "建议"}</div>
-                <h3>{action.title}</h3>
-                <p>{action.detail}</p>
-              </article>
-            ))}
-          </div>
-        </aside>
-      </section>
-    </main>
+      {notice && <div className="notice">{notice}</div>}
+      <MappingSummary mapping={datasetId ? null : undefined} />
+    </section>
   );
 }
 
-function Metric({ icon: Icon, label, value, tone }) {
+function MappingSummary({ mapping }) {
+  if (!mapping) return null;
   return (
-    <article className={`metric ${tone}`}>
-      <Icon size={20} />
+    <div className="panel">
+      <span className="eyebrow">字段识别</span>
+      <h3>识别 {mapping.rows} 行，字段置信度 {Math.round((mapping.mapping_confidence || 0) * 100)}%</h3>
+      <p>已映射：{mapping.mapped_fields?.slice(0, 8).join("、") || "待识别"}</p>
+      {mapping.missing_fields?.length ? <p>缺失字段：{mapping.missing_fields.join("、")}</p> : null}
+    </div>
+  );
+}
+
+function DiagnosePage({ datasetId, questionId, setDiag }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    apiPost("/api/diagnose", { dataset_id: datasetId, question_id: questionId })
+      .then((payload) => {
+        if (!mounted) return;
+        setData(payload);
+        setDiag(payload);
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
+  }, [datasetId, questionId, setDiag]);
+
+  if (loading && !data) return <LoadingPage title="正在诊断数据" />;
+  const k = data?.kpis || {};
+  return (
+    <section className="page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow">诊断</span>
+          <h1>经营诊断</h1>
+          <p>只保留 5 个指标和 3 条观察，避免把用户拖进仪表盘。</p>
+        </div>
+      </header>
+      <div className="kpi-grid">
+        <Kpi label="总播放" value={formatNumber(k.total_views)} />
+        <Kpi label="收藏率" value={percent(k.favorite_rate)} />
+        <Kpi label="咨询率" value={percent(k.consultation_rate)} />
+        <Kpi label="收入" value={`¥${formatNumber(k.revenue)}`} />
+        <Kpi label="千次播放收入" value={`¥${(k.rpm || 0).toFixed(1)}`} />
+      </div>
+      <div className="three-grid">
+        {data?.observations?.map((item) => (
+          <article className="insight" key={item.title}>
+            <span>观察</span>
+            <h3>{item.title}</h3>
+            <p>{item.detail}</p>
+          </article>
+        ))}
+      </div>
+      <MappingSummary mapping={data?.mapping} />
+      <Trace trace={data?.trace} />
+    </section>
+  );
+}
+
+function Kpi({ label, value }) {
+  return (
+    <div className="kpi">
       <span>{label}</span>
-      <strong title={value}>{value}</strong>
-    </article>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function DecisionPage({ datasetId, questionId, setQuestionId, setDecision }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    apiPost("/api/decision", { dataset_id: datasetId, question_id: questionId })
+      .then((payload) => {
+        if (!mounted) return;
+        setData(payload);
+        setDecision(payload);
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
+  }, [datasetId, questionId, setDecision]);
+
+  const d = data?.decision;
+  const effect = d?.effect;
+  const readiness = d?.readiness;
+  const ci = ciStatus(effect);
+  return (
+    <section className="page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow">决策检查</span>
+          <h1>这件事值得做吗？</h1>
+          <p>把“看起来有效”拆成处理组、对照组、结果指标和置信区间。</p>
+        </div>
+        <select value={questionId} onChange={(e) => setQuestionId(e.target.value)}>
+          {questions.map((q) => <option key={q.id} value={q.id}>{q.label}</option>)}
+        </select>
+      </header>
+      {loading && !d ? <LoadingPage title="正在估计增量" /> : (
+        <>
+          <div className="decision-card">
+            <span className="eyebrow">策略对比</span>
+            <h2>{d?.query?.label}</h2>
+            <p>策略：{cn(d?.query?.treatment)} = {cn(d?.query?.treatment_value) || "最佳组"}；对照：其他方案；指标：{cn(d?.query?.outcome)}</p>
+          </div>
+          <div className="kpi-grid four">
+            <Kpi label="直接差异" value={(effect?.ate || 0).toFixed(2)} />
+            <Kpi label="调整后增量" value={(effect?.adjusted_effect || 0).toFixed(2)} />
+            <Kpi label="相对提升" value={percent(effect?.relative_lift)} />
+            <Kpi label="样本量" value={formatNumber(effect?.sample_size)} />
+          </div>
+          <div className="panel">
+            <div className={`ci-card ${ci.level}`}>
+              <div>
+                <span>重采样 95% 区间</span>
+                <strong>[{(effect?.ci_95?.[0] || 0).toFixed(2)}, {(effect?.ci_95?.[1] || 0).toFixed(2)}]</strong>
+              </div>
+              <div>
+                <span>{ci.title}</span>
+                <p>{ci.detail}</p>
+              </div>
+            </div>
+            <p>{effect?.explanation}</p>
+            <p>可靠性：{readiness?.risk_level}风险；{readiness?.can_make_causal_claim ? "可以谨慎作为因果增量判断。" : "更适合作为下周验证计划。"}</p>
+            {(effect?.warnings || readiness?.warnings || []).slice(0, 3).map((w) => <p className="warn" key={w}>{w}</p>)}
+          </div>
+          <Trace trace={data?.trace} />
+        </>
+      )}
+    </section>
+  );
+}
+
+function ActionPage({ datasetId, questionId }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    const label = questions.find((q) => q.id === questionId)?.label || "评估内容策略增量";
+    apiPost("/api/v3-agent", { dataset_id: datasetId, task: `${label}，生成下周三张行动卡。` })
+      .then((payload) => {
+        if (!mounted) return;
+        setData({
+          dataset_id: datasetId,
+          action_cards: payload?.user_artifact?.actions || [],
+          trace: payload?.developer_trace?.executed_skills || []
+        });
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
+  }, [datasetId, questionId]);
+  if (loading && !data) return <LoadingPage title="正在生成行动卡" />;
+  return (
+    <section className="page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow">行动计划</span>
+          <h1>下周只做这 3 件事</h1>
+          <p>每张卡都包含依据、风险、下一步和要看的指标。</p>
+        </div>
+      </header>
+      <div className="action-grid">
+        {data?.action_cards?.map((card, index) => {
+          const type = card.type || card.title || "下周验证";
+          const title = card.recommendation || card.title;
+          const evidence = card.evidence || card.explanation;
+          const risk = card.risk || `可信度：${card.confidence || "需要验证"}`;
+          const metric = card.metric_to_watch || "按卡片说明记录";
+          return (
+          <article className="action" key={`${title}-${index}`}>
+            {React.createElement(actionIcon(type))}
+            <span>{cn(type)}</span>
+            <h3>{title}</h3>
+            <p><strong>依据：</strong>{evidence}</p>
+            <p><strong>风险：</strong>{risk}</p>
+            <p><strong>下一步：</strong>{card.next_step}</p>
+            <small>观察指标：{cn(metric)}</small>
+          </article>
+          );
+        })}
+      </div>
+      <Trace trace={data?.trace} />
+    </section>
+  );
+}
+
+function AgentPage({ datasetId, questionId }) {
+  const [data, setData] = useState(null);
+  const [v3, setV3] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showTrace, setShowTrace] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    setLoading(true);
+    Promise.all([
+      apiPost("/api/full-agent", { dataset_id: datasetId, question_id: questionId }),
+      apiPost("/api/v3-agent", { dataset_id: datasetId, task: "评估内容策略增量，生成可验证的下一步行动。" })
+    ])
+      .then(([agentPayload, v3Payload]) => {
+        if (!mounted) return;
+        setData(agentPayload);
+        setV3(v3Payload);
+      })
+      .finally(() => mounted && setLoading(false));
+    return () => { mounted = false; };
+  }, [datasetId, questionId]);
+  if (loading && !data) return <LoadingPage title="正在构建图谱与候选因果图" />;
+  const effect = data?.decision?.effect;
+  const ci = ciStatus(effect);
+  return (
+    <section className="page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow">图谱与因果</span>
+          <h1>图谱与因果检查</h1>
+          <p>先解释数据关系，再检查建议是否稳，避免把相关性误当成结论。</p>
+        </div>
+      </header>
+
+      <div className="agent-grid">
+        <div className="panel">
+          <span className="eyebrow">知识图谱</span>
+          <h3>{data?.kg?.summary?.node_count || 0} 个实体，{data?.kg?.summary?.edge_count || 0} 条关系</h3>
+          <p>{data?.kg?.summary?.explanation}</p>
+          <GraphSvg nodes={data?.kg?.nodes || []} edges={data?.kg?.edges || []} />
+        </div>
+        <div className="panel">
+          <span className="eyebrow">候选关系图</span>
+          <h3>{data?.dag?.method}</h3>
+          <p>{data?.dag?.explanation}</p>
+          <DagList edges={data?.dag?.edges || []} />
+        </div>
+      </div>
+
+      <div className="agent-grid">
+        <div className="panel">
+          <span className="eyebrow">置信区间</span>
+          <h3>{ci.title}</h3>
+          <CiPlot effect={effect} />
+          <p>{ci.detail}</p>
+        </div>
+        <div className="panel">
+          <span className="eyebrow">工作流判断</span>
+          <h3>{data?.decision?.evaluation?.confidence || "中"}可信度</h3>
+          <p>{data?.decision?.validation_loop?.message}</p>
+          <p>{data?.decision?.evaluation?.constraint_check}</p>
+          <button className="primary-btn subtle" onClick={() => setShowTrace(!showTrace)}>
+            {showTrace ? "隐藏开发追踪" : "查看开发追踪"}
+          </button>
+        </div>
+      </div>
+      <div className="agent-grid">
+        <div className="panel">
+          <span className="eyebrow">用户结果视图</span>
+          <h3>{v3?.user_artifact?.title || "可验证经营建议"}</h3>
+          <p>{v3?.user_artifact?.result}</p>
+          <p>可信度：{v3?.user_artifact?.confidence || "需要验证"}；验证：{v3?.user_artifact?.validation_passed ? "通过" : "已降级为验证建议"}。</p>
+          <p>{v3?.user_artifact?.limitations}</p>
+        </div>
+        <div className="panel">
+          <span className="eyebrow">系统判断</span>
+          <h3>{v3?.validation_report?.valid ? "当前建议已通过基础校验" : "当前建议需要更多数据"}</h3>
+          <p>系统会检查字段、数据质量、混杂因素、区间稳定性和隐私风险，再生成行动卡。</p>
+          <p>想查看完整执行链，可以打开开发追踪。</p>
+          <button className="primary-btn subtle" onClick={() => setShowTrace(!showTrace)}>
+            {showTrace ? "隐藏开发追踪" : "查看开发追踪"}
+          </button>
+        </div>
+      </div>
+      {showTrace && <DeveloperTracePanel panel={v3?.developer_trace || {}} />}
+    </section>
+  );
+}
+
+function GraphSvg({ nodes, edges }) {
+  const picked = nodes.slice(0, 18);
+  const center = { x: 210, y: 130 };
+  const points = picked.map((node, index) => {
+    const angle = (Math.PI * 2 * index) / Math.max(1, picked.length);
+    const radius = node.type === "内容" ? 104 : 78;
+    return { ...node, x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius };
+  });
+  const map = new Map(points.map((node) => [node.id, node]));
+  return (
+    <svg className="graph-svg" viewBox="0 0 420 260" role="img" aria-label="知识图谱可视化">
+      {edges.slice(0, 36).map((edge, index) => {
+        const source = map.get(edge.source);
+        const target = map.get(edge.target);
+        if (!source || !target) return null;
+        return <line key={index} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />;
+      })}
+      {points.map((node) => (
+        <g key={node.id}>
+          <circle cx={node.x} cy={node.y} r={node.type === "内容" ? 12 : 9} />
+          <text x={node.x + 12} y={node.y + 4}>{node.label.slice(0, 10)}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
+function DagList({ edges }) {
+  return (
+    <div className="dag-list">
+      {edges.slice(0, 7).map((edge) => (
+        <div key={`${edge.source}-${edge.target}`}>
+          <strong>{cn(edge.source)}</strong>
+          <span>→</span>
+          <strong>{cn(edge.target)}</strong>
+          <small>强度 {Number(edge.weight || 0).toFixed(2)}｜{edge.reason}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CiPlot({ effect }) {
+  const low = Number(effect?.ci_95?.[0] || 0);
+  const high = Number(effect?.ci_95?.[1] || 0);
+  const ate = Number(effect?.adjusted_effect || effect?.ate || 0);
+  const min = Math.min(low, high, ate, 0);
+  const max = Math.max(low, high, ate, 0);
+  const scale = (value) => 30 + ((value - min) / Math.max(1e-6, max - min)) * 340;
+  return (
+    <svg className="ci-svg" viewBox="0 0 400 96" role="img" aria-label="置信区间图">
+      <line className="axis" x1="30" y1="50" x2="370" y2="50" />
+      <line className="zero" x1={scale(0)} y1="22" x2={scale(0)} y2="76" />
+      <line className="interval" x1={scale(low)} y1="50" x2={scale(high)} y2="50" />
+      <circle cx={scale(ate)} cy="50" r="7" />
+      <text x="30" y="88">{low.toFixed(2)}</text>
+      <text x={scale(0) - 7} y="18">0</text>
+      <text x="318" y="88">{high.toFixed(2)}</text>
+    </svg>
+  );
+}
+
+function DeveloperTrace({ trace, audit }) {
+  return (
+    <div className="panel dev-trace">
+      <span className="eyebrow">开发追踪</span>
+      <h3>只展示步骤摘要，不展示原始上传数据</h3>
+      <div className="trace-line">
+        {trace.map((step) => <code key={step}>{step}</code>)}
+      </div>
+      <div className="audit-list">
+        {audit.slice(-8).map((item, index) => (
+          <p key={`${item.time}-${index}`}>{item.step}｜{new Date(item.time).toLocaleString("zh-CN")}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeveloperTracePanel({ panel }) {
+  const trace = panel.trace || [];
+  const rewards = panel.agent_rewards || {};
+  const route = panel.route_decision || {};
+  return (
+    <div className="panel dev-trace">
+      <span className="eyebrow">开发追踪</span>
+      <h3>任务规格 / 路由 / 工作流 / 校验 / 奖励 / 记忆</h3>
+      <div className="trace-line">
+        {(panel.executed_skills || []).map((skill) => <code key={skill}>{skill}</code>)}
+      </div>
+      <div className="agent-grid">
+        <div>
+          <p><strong>任务类型：</strong>{panel.task_spec?.task_type}</p>
+          <p><strong>路由：</strong>{route.route_id || "未生成"}</p>
+          <p><strong>工具：</strong>{(route.selected_tools || []).join("、") || "未生成"}</p>
+          <p><strong>选中工作流：</strong>{panel.selected_workflow?.method}</p>
+          <p><strong>验证：</strong>{panel.validation_report?.valid ? "通过" : "未通过"}</p>
+        </div>
+        <div>
+          <p><strong>过程奖励：</strong>{Number(panel.process_rewards?.total || panel.step_rewards?.total || 0).toFixed(2)}</p>
+          <p><strong>因果表述：</strong>{panel.claim_review?.claim_level || "未检查"}</p>
+          {Object.entries(rewards).map(([role, item]) => (
+            <p key={role}><strong>{role}：</strong>{Number(item.normalized || 0).toFixed(2)}</p>
+          ))}
+        </div>
+      </div>
+      <div className="audit-list">
+        {trace.slice(-10).map((item, index) => (
+          <p key={`${item.step}-${index}`}>{index + 1}. {item.step}｜{item.role}</p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LoadingPage({ title }) {
+  return <div className="loading"><Loader2 className="spin" /> {title}</div>;
+}
+
+function App() {
+  const [page, setPage] = useState("upload");
+  const [collapsed, setCollapsed] = useState(false);
+  const [datasetId, setDatasetId] = useState(null);
+  const [mapping, setMapping] = useState(null);
+  const [questionId, setQuestionId] = useState("pain_point_title");
+  const [, setDiag] = useState(null);
+  const [, setDecision] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/demo").then((r) => r.json()).then((data) => {
+      setDatasetId(data.dataset_id);
+      setMapping(data.mapping);
+      prefetchAnalysis(data.dataset_id, questionId);
+    });
+  }, []);
+
+  useEffect(() => {
+    prefetchAnalysis(datasetId, questionId);
+  }, [datasetId, questionId]);
+
+  return (
+    <div className="shell">
+      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
+      <main className={collapsed ? "expanded" : ""}>
+        {page === "upload" && <UploadPage datasetId={datasetId} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
+        {page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
+        {page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
+        {page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}
+        {page === "actions" && <ActionPage datasetId={datasetId} questionId={questionId} />}
+      </main>
+    </div>
   );
 }
 

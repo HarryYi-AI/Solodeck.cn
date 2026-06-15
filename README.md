@@ -21,6 +21,41 @@ SoloDeck focuses on:
 
 Creators and solo businesses often have useful data scattered across platform dashboards, spreadsheets, payment screenshots, feedback notes, and campaign records. SoloDeck helps them move from fragmented data to concrete operating decisions.
 
+## SoloDeck v3: Verifiable Data Agent Runtime
+
+SoloDeck v3 upgrades the product from a dashboard-style prototype into a verifiable data-agent runtime:
+
+```text
+User data
+-> typed task compiler
+-> memory and knowledge graph context
+-> hypothesis tree
+-> method planner
+-> executable Python skills
+-> artifact/statistical/causal/privacy validation
+-> repair loop
+-> process reward
+-> user-facing action cards
+```
+
+The default user interface remains simple: upload data, see diagnosis, check whether a decision is reliable, and read three next actions. The technical layer is available in the developer trace panel for review, but it is not exposed as raw JSON to users.
+
+Research ideas used in v3:
+
+- DataMind / Scaling Generalist Data-Analytic Agents: task taxonomy, easy-to-hard data-agent workflows, stable code-based multi-turn rollout.
+- JanusCoder: visual-programmatic traceability, so visual output remains tied to executable logic.
+- Memory failure studies: explicit dataset, graph, trace, failure, and skill-utility memory to reduce stale or contradictory agent memory.
+- Binary-matrix test-case evaluation: SoloDeckBench-lite treats failures as diagnostic patterns, not just pass/fail demos.
+- Graph structure-semantic evolution: the knowledge graph is treated as evolving operating memory across content, product, feedback, and experiment domains.
+
+References:
+
+- https://arxiv.org/abs/2509.25084
+- https://arxiv.org/abs/2510.23538
+- https://arxiv.org/abs/2510.08720
+- https://arxiv.org/abs/2602.10506
+- https://sites.google.com/view/memagent-iclr26/schedule
+
 ## What It Solves
 
 - Content creators know which posts performed well, but not whether the title, platform, topic, timing, or account size caused the difference.
@@ -328,6 +363,132 @@ Nginx and systemd examples are in:
 solo_creator_agent/deploy/
 ```
 
+## Agent, KG and Causal Workflow
+
+The current SPA calls real Python Skills through FastAPI. The main endpoint for the full agent loop is:
+
+```text
+POST /api/full-agent
+```
+
+It returns:
+
+- `kg`: a lightweight knowledge graph built from content, platform, topic, title style, account, series, feedback keywords and revenue/conversion signals
+- `dag`: a candidate causal graph for hypothesis generation
+- `decision.effect`: ATE-style estimate, adjusted effect, CATE segments, IPTW fallback when feasible, and Bootstrap 95% confidence interval
+- `action_cards`: three action cards for continue, reduce/pause, or validate next week
+- `audit`: step-by-step audit trail without exposing raw uploaded rows
+
+### Knowledge Graph
+
+`solo_creator_agent/src/knowledge_graph.py` builds graph entities and relations:
+
+```text
+Content -> Platform
+Content -> Topic
+Content -> Title Style
+Content -> Series
+Content -> Text Feature
+Feedback Text -> Keyword Entity
+```
+
+The KG is used for explanation and constraints. It does not by itself claim causality.
+
+### Candidate DAG
+
+`solo_creator_agent/src/causal_discovery.py` generates candidate DAG edges. It tries optional libraries first:
+
+```text
+causal-learn PC
+LiNGAM
+```
+
+If those packages are not installed, SoloDeck uses a deterministic fallback:
+
+```text
+correlation screening + business time order + KG constraints
+```
+
+This creates a candidate DAG for low-cost validation planning, not a final proof.
+
+### Bootstrap Confidence Interval
+
+`EffectEstimationSkill` repeatedly resamples treatment and control groups, then recomputes the mean difference. The 2.5% and 97.5% quantiles become the 95% interval.
+
+Plain-English reading:
+
+```text
+If the interval crosses 0, the result is not stable enough to scale.
+If most or all of the interval is above 0, the strategy is more likely positive.
+If the interval is below 0, pause or redesign the strategy.
+```
+
+### LangGraph Workflow
+
+`solo_creator_agent/src/agent_workflow.py` is LangGraph-compatible. When `langgraph` is installed, it compiles and runs a `StateGraph`. When it is not installed, the same named nodes run through a deterministic fallback executor.
+
+```text
+DataIngestion
+  -> KnowledgeGraph
+  -> CausalDiscovery
+  -> DecisionQuestion
+  -> EffectEstimation
+  -> Reflection
+  -> Evaluation
+  -> ActionPlan
+```
+
+Reflection and Evaluation decide whether a result can be scaled or should loop into low-cost validation because the confidence interval is unstable.
+
+## SoloDeck v2: Self-Evolving Data Agent Runtime
+
+The v2 runtime lives in the top-level `solodeck/` package. It turns SoloDeck from a single decision-support app into a multi-agent data runtime:
+
+```text
+Document
+  -> NER / text chunking
+  -> Relation Extraction
+  -> Knowledge Graph
+  -> Causal Discovery
+  -> Candidate Causal Graph
+  -> GraphRAG-style evidence retrieval
+  -> Strategy Agent
+```
+
+Implemented modules:
+
+```text
+solodeck/compiler/task_compiler.py
+solodeck/planning/hypothesis_tree.py
+solodeck/runtime/budget_controller.py
+solodeck/runtime/skill_runtime.py
+solodeck/runtime/method_scheduler.py
+solodeck/runtime/model_router.py
+solodeck/verification/validators.py
+solodeck/evolution/process_reward.py
+solodeck/evolution/test_time_evolution.py
+solodeck/memory/trace_memory.py
+solodeck/workflows/data_agent_graph.py
+```
+
+The v2 API endpoint is:
+
+```text
+POST /api/v2-agent
+```
+
+It returns task spec, hypothesis tree, dynamic reasoning budget, selected plan, validation result, process rewards, memory update and developer-safe trace.
+
+LangGraph is used when installed. The current development environment installs `langgraph>=0.2`; if unavailable in a lighter deployment, the same node functions can run through the deterministic fallback executor.
+
+Run the benchmark:
+
+```bash
+python solodeck_bench/run_benchmark.py
+```
+
+Benchmark metrics include task success rate, artifact validity, causal overclaim rate, repair success rate, latency, reward and method entropy.
+
 ## Data Privacy and User Storage
 
 SoloDeck includes a local account and workspace system:
@@ -344,7 +505,7 @@ The current version uses SQLite for easy demo and development. For commercial de
 
 - Causal estimates are exploratory and should not be treated as definitive causal proof.
 - Screenshot extraction depends on the configured vision-capable model.
-- LangGraph is not required at runtime yet. The current workflow layer is LangGraph-ready but implemented as a lightweight local trace.
+- LangGraph is supported when installed; otherwise the same nodes run through the local fallback executor.
 - RAG is currently a lightweight TF-IDF knowledge matching module, not a full vector database pipeline.
 - Recommendation learning is a transparent bandit-style ranking adjustment, not a full reinforcement-learning system.
 
