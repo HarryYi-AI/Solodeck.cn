@@ -107,6 +107,9 @@ def run_v4_agent(
 def _format_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
     if state.get("clarification"):
         return state["clarification"]
+    llm_reply = _try_llm_reply(artifact, state)
+    if llm_reply:
+        return llm_reply
     title = artifact.get("title") or "分析完成"
     result = artifact.get("result") or ""
     cards = artifact.get("action_cards") or state.get("action_cards") or []
@@ -123,6 +126,59 @@ def _format_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
     if state.get("reuse_cache"):
         parts.append("（复用上轮分析结果以降低成本）")
     return "\n".join(parts)
+
+
+def _try_llm_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
+    try:
+        from solo_creator_agent.src.llm_agent import call_llm, llm_configured
+
+        if not llm_configured():
+            return ""
+
+        task_spec = state.get("task_spec") or {}
+        validation = state.get("validation_report") or {}
+        risk = state.get("risk_profile") or {}
+        cards = artifact.get("action_cards") or state.get("action_cards") or []
+        linked_entities = (state.get("entity_link") or {}).get("linked_entities") or []
+        unresolved = (state.get("entity_link") or {}).get("unresolved") or []
+
+        prompt = """
+你是 SoloDeck 的经营分析助手。请把分析结果写成自然、简洁、像真人顾问在说话的回复。
+要求：
+1. 全程中文，避免机械模板口吻。
+2. 优先回答用户刚刚的问题，不要泛泛而谈。
+3. 结构最多 4 行：
+   - 结论
+   - 为什么这样判断
+   - 下一步建议
+   - 如果证据不够，再补一句需要补什么
+4. 如果当前结果接近 0 或证据很弱，不要硬下结论，要明确说“现有数据还不足以判断”，并告诉用户补什么。
+5. 不要出现“高风险因果路径”“工具链”“校验器”“artifact”“API”等内部词。
+6. 如果有 action cards，把它们转成自然语言建议，不要原样复制键名。
+7. 回复控制在 120 个中文字以内。
+"""
+
+        payload = {
+            "user_question": state.get("message", ""),
+            "objective": task_spec.get("objective", ""),
+            "task_type": task_spec.get("task_type", ""),
+            "candidate_treatments": task_spec.get("candidate_treatments", []),
+            "candidate_outcomes": task_spec.get("candidate_outcomes", []),
+            "linked_entities": linked_entities,
+            "unresolved_entities": unresolved,
+            "result": artifact.get("result", ""),
+            "confidence": artifact.get("confidence", ""),
+            "limitations": artifact.get("limitations", ""),
+            "action_cards": cards[:2],
+            "validation_issues": validation.get("issues", []),
+            "validation_valid": validation.get("valid", False),
+            "high_risk": risk.get("high_risk", False),
+            "reuse_cache": bool(state.get("reuse_cache")),
+        }
+        reply = call_llm(prompt, payload, language="中文", temperature=0.25, profile="basic").strip()
+        return reply[:220]
+    except Exception:
+        return ""
 
 
 def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str, Any], reply: str) -> None:
