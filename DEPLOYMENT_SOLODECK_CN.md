@@ -4,9 +4,11 @@ This guide uses:
 
 - Private GitHub repo: `git@github.com:HarryYi-AI/Solodeck.cn.git`
 - Frontend: Cloudflare Pages
-- Backend: Render / Railway / VPS running FastAPI
+- Backend: VPS FastAPI + **Cloudflare Tunnel** (`api.solodeck.cn` → tunnel `solodeck-api`)
+- Domain NS: Cloudflare (`tony.ns.cloudflare.com`, `tiffany.ns.cloudflare.com`)
 - Domain: `solodeck.cn`
-- Current DNS: `dns1.hichina.com`, `dns2.hichina.com`
+
+See `solo_creator_agent/deploy/CLOUDFLARE_TUNNEL.md` if chat returns HTML/530 errors.
 
 ## 1. Repository
 

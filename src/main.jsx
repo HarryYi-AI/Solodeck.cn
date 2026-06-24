@@ -78,11 +78,20 @@ async function apiPost(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {})
   }).then(async (res) => {
-    const data = await res.json();
+    const raw = await res.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      if (raw.trim().startsWith("<!") || raw.includes("<!doctype")) {
+        throw new Error("分析服务暂不可用：API 未返回有效数据。请检查服务器 FastAPI 与 Cloudflare Tunnel 是否在线。");
+      }
+      throw new Error(raw.slice(0, 160) || "请求失败");
+    }
     if (!res.ok) throw new Error(data.error || "请求失败");
     return data;
   });
-  cache.set(key, promise);
+  if (!noCache) cache.set(key, promise);
   return promise;
 }
 
@@ -109,17 +118,7 @@ function ChatPage({ datasetId }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [meta, setMeta] = useState(null);
-  const [voiceStack, setVoiceStack] = useState("pipecat");
-  const [stacks, setStacks] = useState([]);
   const bottomRef = useRef(null);
-
-  useEffect(() => {
-    fetch("/api/v4/voice/stacks").then((r) => r.json()).then((d) => {
-      setStacks(d.stacks || []);
-      if (d.default) setVoiceStack(d.default);
-    }).catch(() => {});
-  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -138,19 +137,11 @@ function ChatPage({ datasetId }) {
         message: text
       });
       setSessionId(data.session_id);
-      setMeta({
-        cost: data.session_cost_total,
-        risk: data.risk_profile,
-        tools: data.tool_calls,
-        plan: data.plan_steps,
-        traceId: data.trace_id
-      });
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply,
         artifact: data.user_artifact,
-        validation: data.validation_report,
-        postWriter: data.post_writer_validation
+        validation: data.validation_report
       }]);
     } catch (error) {
       setMessages((prev) => [...prev, { role: "assistant", content: error.message, error: true }]);
@@ -161,54 +152,19 @@ function ChatPage({ datasetId }) {
 
   const starters = [
     "小红书痛点标题是不是比教程标题更能带来咨询？",
-    "那个平台转化更好？",
-    "继续算一下上周的收入趋势"
+    "哪个平台转化更好？",
+    "继续看成交数的变化"
   ];
-
-  const activeStack = stacks.find((s) => s.id === voiceStack);
 
   return (
     <section className="page chat-page">
       <header className="page-head">
         <div>
-          <span className="eyebrow">SoloDeck v4</span>
-          <h1>多轮对话分析</h1>
-          <p>支持追问、工具编排与上下文压缩。语音接入可选三档栈（LiveKit / Pipecat / 边缘离线）。</p>
+          <span className="eyebrow">对话分析</span>
+          <h1>经营问题，直接问</h1>
+          <p>上传数据后，用自然语言提问。系统会完成分析校验，并给出可执行的行动建议；支持多轮追问。</p>
         </div>
-        {meta && (
-          <div className="chat-meta">
-            <span>会话 {sessionId?.slice(0, 10)}…</span>
-            <span>累计成本 {Number(meta.cost || 0).toFixed(2)}</span>
-            {meta.risk?.high_risk && <span className="risk-badge">深度校验</span>}
-            {meta.risk?.reuse_cache && <span className="cache-badge">缓存复用</span>}
-          </div>
-        )}
       </header>
-
-      {stacks.length ? (
-        <div className="panel voice-stack-panel">
-          <span className="eyebrow">语音栈（接入参考）</span>
-          <div className="voice-stack-tabs">
-            {stacks.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={voiceStack === s.id ? "active" : ""}
-                onClick={() => setVoiceStack(s.id)}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-          {activeStack ? (
-            <p className="voice-stack-detail">
-              {activeStack.transport} · {activeStack.stt} · {activeStack.llm} · {activeStack.tts}
-              <br />
-              延迟目标 <strong>{activeStack.latency?.e2e_label}</strong> · {activeStack.license}
-            </p>
-          ) : null}
-        </div>
-      ) : null}
 
       <div className="chat-starters">
         {starters.map((item) => (
@@ -220,7 +176,7 @@ function ChatPage({ datasetId }) {
         {messages.length === 0 && (
           <div className="chat-empty">
             <MessageSquare size={28} />
-            <p>用口语提问即可。系统会自动编译任务、调用工具、验证结论并生成行动建议。</p>
+            <p>输入你的经营问题，例如标题策略、平台选择或收入变化。分析完成后会给出结论与下一步建议。</p>
           </div>
         )}
         {messages.map((msg, index) => (
@@ -239,26 +195,15 @@ function ChatPage({ datasetId }) {
             ) : null}
           </article>
         ))}
-        {loading && <div className="chat-loading"><Loader2 className="spin" size={18} /> 正在编排工具链…</div>}
+        {loading && <div className="chat-loading"><Loader2 className="spin" size={18} /> 正在分析…</div>}
         <div ref={bottomRef} />
       </div>
-
-      {meta?.plan?.length ? (
-        <div className="panel chat-plan">
-          <span className="eyebrow">任务编排</span>
-          <div className="plan-steps">
-            {meta.plan.map((step) => (
-              <span key={step.id}>{step.goal}</span>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       <div className="chat-input-row">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="继续追问，例如：那个平台呢？换成成交数再看一遍。"
+          placeholder="输入问题，Enter 发送；Shift+Enter 换行"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -283,7 +228,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
           <span className="logo" />
           <div>
             <strong>SoloDeck</strong>
-            <small>v4 · Northstar Labs</small>
+            <small>Northstar Labs</small>
           </div>
         </div>
         <p className="side-copy">把数据变成下一步可执行计划。</p>
