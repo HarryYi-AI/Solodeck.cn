@@ -34,6 +34,7 @@ class SoloDeckState(TypedDict, total=False):
     readiness: dict[str, Any]
     effect: dict[str, Any]
     validation_loop: dict[str, Any]
+    evaluation: dict[str, Any]
     action_plan: dict[str, Any]
     action_cards: list[dict[str, Any]]
     audit: list[dict[str, Any]]
@@ -149,7 +150,8 @@ class SoloDeckAgentWorkflow:
         similarity = SimilaritySkill().run(state["data"])
         observations = _workflow_observations(state["data"], similarity)
         plan = ActionTestSkill().run(state["query"], state["effect"])
-        if state["evaluation"]["needs_validation_loop"]:
+        evaluation = state.get("evaluation", {})
+        if evaluation.get("needs_validation_loop"):
             plan["decision"] = "先做小范围验证"
             plan["steps"] = [
                 "连续 10-14 天，只在同一平台测试一个变量。",

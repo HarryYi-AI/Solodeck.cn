@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
 ROOT = Path(__file__).resolve().parents[2]
 SESSION_ROOT = ROOT / "data" / "solodeck_v4_sessions"
 SESSION_ROOT.mkdir(parents=True, exist_ok=True)
@@ -73,6 +75,29 @@ def update_session(session_id: str, **fields: Any) -> dict[str, Any]:
 
 def _save(session: dict[str, Any]) -> None:
     sid = session["session_id"]
-    _MEMORY[sid] = session
+    safe = _json_safe(session)
+    _MEMORY[sid] = safe
     path = SESSION_ROOT / f"{sid}.json"
-    path.write_text(json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(safe, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return value

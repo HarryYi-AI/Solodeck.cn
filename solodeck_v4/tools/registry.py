@@ -51,6 +51,7 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
     from solodeck_v3.skills.data_quality_skill import DataQualitySkill
 
     spec = state.get("task_spec") or {}
+    state["task"] = spec.get("objective") or state.get("message", "")
     if state.get("reuse_cache") and state.get("artifact_cache"):
         state["artifacts"] = list(state["artifact_cache"].values())
         return {"ok": True, "reused_cache": True, "cost": 0.03}
@@ -68,7 +69,12 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
     )
     budget = state.get("budget") or {"max_plans": 1}
     plans = generate_candidate_plans(spec, state["hypothesis_tree"], budget)
-    state["route_decision"] = route_task(spec, state.get("kg_context", {}))
+    state["route_decision"] = route_task(
+        spec,
+        state.get("data_quality_report"),
+        state.get("critique"),
+        state.get("kg_context", {}),
+    )
     plan = plans[0] if plans else {"skills": ["SchemaSkill", "ReportSkill"], "estimated_cost": 0.08}
     state["selected_plan"] = plan
     execute_skill_sequence(state, plan.get("skills", []))
@@ -88,6 +94,7 @@ def _tool_compose_response(state: dict[str, Any], args: dict[str, Any]) -> dict[
     from solodeck_v3.agents.writer_agent import WriterAgent
     from solodeck_v3.frontend.user_artifact_view import build_user_artifact_view
     from solodeck_v3.frontend.developer_trace_panel import build_developer_trace_panel
+    from solodeck_v3.workflows.data_agent_graph import _action_cards
 
     if not state.get("final_report"):
         out = ReportSkill().run(state)
@@ -98,6 +105,8 @@ def _tool_compose_response(state: dict[str, Any], args: dict[str, Any]) -> dict[
             "content": out.content,
             "generated_by": "ReportSkill",
         })
+    if not state.get("action_cards") and any(a.get("id") == "bootstrap_ci" for a in state.get("artifacts", [])):
+        state["action_cards"] = _action_cards(state)
     state["user_artifact"] = build_user_artifact_view(state)
     state["user_artifact"] = WriterAgent().polish_user_artifact(state["user_artifact"])
     state["developer_trace"] = build_developer_trace_panel(state)

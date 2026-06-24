@@ -48,8 +48,15 @@ def run_v4_agent(
     state["entity_link"] = link_entities(message, columns, state["linked_entities"])
 
     append_trace(state, "LoadSession", "Orchestrator", {"turns": len(session.get("turns", []))})
+    memory_result = call_tool("retrieve_memory", state, {})
+    state["cost_spent"] += float(memory_result.get("cost", 0))
+    state["tool_calls"].append(memory_result)
+    append_trace(state, "ToolCall", "ExecutorAgent", {"tool": "retrieve_memory", "ok": memory_result.get("ok")})
 
-    call_tool("compile_task", state, {})
+    compile_result = call_tool("compile_task", state, {})
+    state["cost_spent"] += float(compile_result.get("cost", 0))
+    state["tool_calls"].append(compile_result)
+    append_trace(state, "ToolCall", "ExecutorAgent", {"tool": "compile_task", "ok": compile_result.get("ok")})
     task_spec = state.get("task_spec") or {}
     risk = assess_risk(message, task_spec, session, state["entity_link"])
     state["risk_profile"] = risk
@@ -66,11 +73,15 @@ def run_v4_agent(
         _finalize_session(session_id, session, state, reply)
         return _package(state, reply)
 
-    state["plan_steps"] = plan_task_steps(task_spec, risk)
+    plan_result = call_tool("plan_steps", state, {})
+    state["cost_spent"] += float(plan_result.get("cost", 0))
+    state["tool_calls"].append(plan_result)
+    append_trace(state, "ToolCall", "ExecutorAgent", {"tool": "plan_steps", "ok": plan_result.get("ok")})
+    state["plan_steps"] = state.get("plan_steps") or plan_task_steps(task_spec, risk)
     tool_sequence = default_tool_sequence(risk)
 
     for tool_name in tool_sequence:
-        if tool_name == "compile_task":
+        if tool_name in {"retrieve_memory", "compile_task", "plan_steps"}:
             continue
         if session.get("cost_spent", 0) + state["cost_spent"] >= session.get("cost_budget", 1.0):
             append_trace(state, "BudgetStop", "Orchestrator", {"reason": "cost budget exceeded"})

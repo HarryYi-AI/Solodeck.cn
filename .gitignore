@@ -14,11 +14,14 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+logs/
 solo_creator_agent/data/uploads/
 solo_creator_agent/data/audit_logs/
+solo_creator_agent/demo_upload_pack/*.zip
 data/solodeck_memory/
 data/solodeck_v3_memory/
 data/solodeck_v4_sessions/
+solodeck_v3/bench/generated_failures/
 agent_state.json
 task_board.json
 .workbench-version

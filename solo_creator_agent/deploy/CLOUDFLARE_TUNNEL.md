@@ -47,26 +47,29 @@ In [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) → **Networks → 
 
 Save and ensure tunnel status is **Healthy** (green).
 
-## 3. Run cloudflared on the VPS
+## 3. Run cloudflared on the VPS (no sudo)
 
-If not already installed:
+Installed to `~/bin/cloudflared` or `/workspace/ylj/bin/cloudflared`.
+
+Get **TUNNEL_TOKEN** from Cloudflare Zero Trust → **Networks → Tunnels → solodeck-api → Configure → Install connector** (copy the token from the install command).
 
 ```bash
-# example Linux install
-curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared
-chmod +x cloudflared
-sudo mv cloudflared /usr/local/bin/
+cd /path/to/heikesong
+bash solo_creator_agent/deploy/start-solodeck-api.sh
+
+export TUNNEL_TOKEN='paste-token-here'
+bash solo_creator_agent/deploy/start-cloudflared.sh
 ```
 
-Run tunnel (use the token from Cloudflare dashboard):
+Or manually:
 
 ```bash
-cloudflared tunnel run solodeck-api
-# or with token:
 cloudflared tunnel run --token <YOUR_TUNNEL_TOKEN>
 ```
 
-Recommended: install as a service so it survives reboot:
+**Without cloudflared**, `api.solodeck.cn` returns **Error 1033** even if FastAPI is running locally.
+
+### With sudo (optional, survives reboot)
 
 ```bash
 sudo cloudflared service install <YOUR_TUNNEL_TOKEN>

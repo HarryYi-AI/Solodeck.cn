@@ -86,14 +86,21 @@ class SoloDeckToolProcessor(Processor):
                 reply = f"收到：{text}。我会基于你的数据做可验证分析，请在前端查看行动卡片。"
             else:
                 result = self.runner(text, self.session)
-                artifact = result.get("user_artifact") or {}
+                artifact = result.get("user_artifact")
+                if not isinstance(artifact, dict):
+                    artifact = {}
                 cards = artifact.get("action_cards") or result.get("action_cards") or []
                 if cards:
                     first = cards[0]
                     reply = first.get("title") or first.get("action") or "分析完成，请查看行动建议。"
                 else:
-                    summary = artifact.get("summary") or result.get("validation_report", {}).get("valid")
-                    reply = f"分析完成。校验通过：{summary}" if summary else "分析完成，建议查看完整报告。"
+                    summary = (
+                        artifact.get("summary")
+                        or artifact.get("result")
+                        or result.get("reply")
+                        or result.get("validation_report", {}).get("valid")
+                    )
+                    reply = f"分析完成。{summary}" if summary else "分析完成，建议查看完整报告。"
             super().process(Frame("text", reply))
         else:
             super().process(frame)

@@ -7,6 +7,9 @@ from solodeck_v3.router.budget_router import route_budget
 
 RISK_KEYWORDS = ("因果", "增量", "置信", "混杂", "ab", "实验", "证明", "一定", "必然")
 CHEAP_FOLLOWUP = ("那个", "同样", "继续", "换成", "再看", "呢")
+COMPARE_MARKERS = ("是否", "是不是", "对比", "相比", "比", "更能", "更适合", "提升", "影响", "变化")
+OUTCOME_COLUMNS = {"consultations", "conversions", "revenue", "favorites", "views"}
+TREATMENT_COLUMNS = {"title_style", "platform", "topic", "publish_time", "feature_tags", "production_hours"}
 
 
 def assess_risk(message: str, task_spec: dict[str, Any], session: dict[str, Any], entity_link: dict[str, Any]) -> dict[str, Any]:
@@ -16,8 +19,10 @@ def assess_risk(message: str, task_spec: dict[str, Any], session: dict[str, Any]
     causal_types = {"causal_effect_estimation", "counterfactual_analysis", "causal_hypothesis_generation", "experiment_design"}
 
     needs_clarification = bool(entity_link.get("unresolved")) and not entity_link.get("ready")
-    high_risk = any(k in msg for k in RISK_KEYWORDS) or task_type in causal_types
+    high_risk = any(k in msg for k in RISK_KEYWORDS) or any(k in msg for k in COMPARE_MARKERS) or task_type in causal_types
     cheap_followup = any(k in msg for k in CHEAP_FOLLOWUP) and session.get("artifact_cache")
+    if cheap_followup and _has_new_focus(entity_link, session):
+        cheap_followup = False
 
     budget = route_budget(task_spec)
     if cheap_followup and not high_risk:
@@ -48,3 +53,20 @@ def assess_risk(message: str, task_spec: dict[str, Any], session: dict[str, Any]
     budget["needs_clarification"] = False
     budget["reuse_cache"] = False
     return budget
+
+
+def _has_new_focus(entity_link: dict[str, Any], session: dict[str, Any]) -> bool:
+    linked_entities = entity_link.get("linked_entities") or []
+    if not linked_entities:
+        return False
+    prior_mentions = set((session.get("linked_entities") or {}).keys())
+    prior_columns = set((session.get("linked_entities") or {}).values())
+    for item in linked_entities:
+        mention = item.get("mention")
+        column = item.get("column")
+        if mention and mention not in prior_mentions:
+            if column in OUTCOME_COLUMNS or column in TREATMENT_COLUMNS:
+                return True
+        if column and column not in prior_columns and (column in OUTCOME_COLUMNS or column in TREATMENT_COLUMNS):
+            return True
+    return False

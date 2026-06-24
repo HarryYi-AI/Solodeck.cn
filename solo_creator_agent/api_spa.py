@@ -23,6 +23,7 @@ from src.agent_orchestrator import find_synthetic_data_dir
 from src.agent_workflow import SoloDeckAgentWorkflow
 from src.audit_log import read_audit
 from src.data_loader import load_contents
+from src.llm_agent import extract_records_from_uploads
 from src.mock_data import generate_all
 from src.skills import dataset_fingerprint, run_skill_pipeline
 from solodeck.workflows.data_agent_graph import run_data_agent_graph
@@ -99,6 +100,18 @@ def _read_frames(file: UploadFile, data: bytes) -> list[pd.DataFrame]:
     return [_read_file(file, data)]
 
 
+def _is_image_file(file: UploadFile) -> bool:
+    name = (file.filename or "").lower()
+    mime = (file.content_type or "").lower()
+    return mime.startswith("image/") or name.endswith((".png", ".jpg", ".jpeg", ".webp"))
+
+
+def _is_text_file(file: UploadFile) -> bool:
+    name = (file.filename or "").lower()
+    mime = (file.content_type or "").lower()
+    return mime.startswith("text/") or name.endswith((".txt", ".md", ".json"))
+
+
 def _text_to_frame(text: str) -> pd.DataFrame:
     if not text.strip():
         return pd.DataFrame()
@@ -173,8 +186,30 @@ def demo() -> JSONResponse:
 async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(default="")) -> JSONResponse:
     frames = []
     notes = []
+    image_files: list[Any] = []
+    extracted_tasks: list[dict[str, Any]] = []
+    text_fragments = [text] if text else []
     for file in files:
         data = await file.read()
+        if _is_image_file(file):
+            from types import SimpleNamespace
+
+            image_files.append(
+                SimpleNamespace(
+                    name=file.filename or "upload.png",
+                    type=file.content_type or "image/png",
+                    getvalue=lambda payload=data: payload,
+                )
+            )
+            continue
+        if _is_text_file(file):
+            try:
+                decoded = data.decode("utf-8", errors="ignore").strip()
+                if decoded:
+                    text_fragments.append(decoded[:12000])
+            except Exception as exc:
+                notes.append(f"{file.filename} 文字读取失败：{exc}")
+            continue
         try:
             parsed = _read_frames(file, data)
             if not parsed:
@@ -183,23 +218,41 @@ async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(de
             frames.extend(parsed)
         except Exception as exc:
             notes.append(f"{file.filename} 未能读取：{exc}")
-    text_frame = _text_to_frame(text)
+    full_text = "\n".join(fragment for fragment in text_fragments if fragment).strip()
+    if image_files:
+        try:
+            extracted = extract_records_from_uploads(full_text, image_files, "contents", language="中文")
+            if extracted.get("records"):
+                frames.append(pd.DataFrame(extracted["records"]))
+            if extracted.get("tasks"):
+                extracted_tasks = extracted["tasks"]
+            if extracted.get("notes"):
+                notes.append(str(extracted["notes"]))
+        except Exception as exc:
+            notes.append(f"截图识别暂时失败：{exc}")
+    text_frame = _text_to_frame(full_text)
     if not text_frame.empty:
         frames.append(text_frame)
     if not frames:
-        return JSONResponse({"error": "没有可读取的 CSV、Excel、ZIP 文件或文字。", "notes": notes}, status_code=400)
+        return JSONResponse({"error": "没有可读取的 CSV、Excel、ZIP、图片截图或文字。", "notes": notes}, status_code=400)
     df = pd.concat(frames, ignore_index=True, sort=False)
     did = dataset_fingerprint(df)
     DATASETS[did] = df
-    TEXTS[did] = text
+    TEXTS[did] = full_text
     for key in list(ANALYSIS_CACHE):
         if key.startswith(f"{did}:") or key.startswith(f"agent:{did}:"):
             ANALYSIS_CACHE.pop(key, None)
     result = _run(did)
     final_did = result["dataset_id"]
     DATASETS[final_did] = df
-    TEXTS[final_did] = text
-    payload = {"dataset_id": final_did, "mapping": result["mapping"], "notes": notes, "trace": result["trace"][:1]}
+    TEXTS[final_did] = full_text
+    payload = {
+        "dataset_id": final_did,
+        "mapping": result["mapping"],
+        "notes": notes,
+        "tasks": extracted_tasks,
+        "trace": result["trace"][:1],
+    }
     return JSONResponse(_json_safe(payload))
 
 

@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, CheckCircle2, FileUp, Loader2, MessageSquare, PauseCircle, Rocket, ShieldCheck, UploadCloud } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileUp, Loader2, MessageSquare, PauseCircle, Rocket, ShieldCheck, UploadCloud, Mic, MicOff } from "lucide-react";
 import "./styles.css";
 
 const pages = [
-  { id: "upload", label: "上传数据", icon: FileUp },
   { id: "chat", label: "对话分析", icon: MessageSquare },
+  { id: "upload", label: "上传数据", icon: FileUp },
   { id: "diagnose", label: "经营诊断", icon: ShieldCheck },
   { id: "decision", label: "决策检查", icon: CheckCircle2 },
   { id: "agent", label: "图谱与因果", icon: ArrowRight },
@@ -69,6 +69,22 @@ function ciStatus(effect) {
   return { level: "watch", title: "先验证", detail: "区间穿过 0，说明结果还不够稳定，不适合直接放大。" };
 }
 
+const API_UNAVAILABLE =
+  "分析服务暂不可用：后端 API 未连通。请在服务器启动 FastAPI（8787）和 Cloudflare Tunnel（cloudflared）。";
+
+async function parseApiResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    if (/^\s*</.test(raw) || /<!doctype/i.test(raw)) {
+      throw new Error(API_UNAVAILABLE);
+    }
+    throw new Error(raw.slice(0, 160) || "请求失败");
+  }
+}
+
 async function apiPost(path, body) {
   const key = `${path}:${JSON.stringify(body || {})}`;
   const noCache = path.includes("/api/v4/chat");
@@ -78,17 +94,8 @@ async function apiPost(path, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {})
   }).then(async (res) => {
-    const raw = await res.text();
-    let data;
-    try {
-      data = raw ? JSON.parse(raw) : {};
-    } catch {
-      if (raw.trim().startsWith("<!") || raw.includes("<!doctype")) {
-        throw new Error("分析服务暂不可用：API 未返回有效数据。请检查服务器 FastAPI 与 Cloudflare Tunnel 是否在线。");
-      }
-      throw new Error(raw.slice(0, 160) || "请求失败");
-    }
-    if (!res.ok) throw new Error(data.error || "请求失败");
+    const data = await parseApiResponse(res);
+    if (!res.ok) throw new Error(data.error || API_UNAVAILABLE);
     return data;
   });
   if (!noCache) cache.set(key, promise);
@@ -113,12 +120,118 @@ function prefetchAnalysis(datasetId, questionId) {
   apiPost("/api/action-plan", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
 }
 
-function ChatPage({ datasetId }) {
+function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact = false }) {
+  const inputRef = useRef(null);
+  const [files, setFiles] = useState([]);
+  const [text, setText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [tasks, setTasks] = useState([]);
+
+  async function upload(selected) {
+    if (!selected.length && !text.trim()) return;
+    setLoading(true);
+    setNotice("正在识别字段和截图内容。");
+    const form = new FormData();
+    selected.forEach((file) => form.append("files", file));
+    form.append("text", text);
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await parseApiResponse(res);
+      if (!res.ok) throw new Error(data.error || "上传失败");
+      setDatasetId(data.dataset_id);
+      setMapping(data.mapping);
+      setTasks(data.tasks || []);
+      cache.clear();
+      setNotice("资料已进入分析区，可以直接开始提问。");
+      prefetchAnalysis(data.dataset_id, "pain_point_title");
+      setTimeout(() => setPage?.("chat"), 240);
+    } catch (error) {
+      setNotice(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className={`panel intake-panel ${compact ? "compact" : ""}`}>
+      <div className="intake-head">
+        <div>
+          <span className="eyebrow">{compact ? "快速接入" : "上传"}</span>
+          <h3>{compact ? "截图、表格、文字都能直接进入分析" : "上传创作者经营数据"}</h3>
+          <p>支持 CSV / Excel / ZIP / PNG / JPG / WEBP / TXT。截图会自动抽取关键信息，不展示原始明细。</p>
+        </div>
+        {datasetId ? <div className="dataset-chip">当前数据集已就绪</div> : null}
+      </div>
+
+      <div className={`intake-grid ${compact ? "compact" : ""}`}>
+        <div className="upload-card" onClick={() => inputRef.current?.click()}>
+          {loading ? <Loader2 className="spin" size={34} /> : <UploadCloud size={38} />}
+          <strong>{loading ? "正在处理" : "点击上传资料或截图"}</strong>
+          <span>后台报表、收入截图、聊天记录、A/B 结果、反馈图片都可以直接放进来。</span>
+          <input
+            ref={inputRef}
+            type="file"
+            multiple
+            accept=".csv,.xlsx,.xls,.zip,.png,.jpg,.jpeg,.webp,.txt,.md,.json"
+            onChange={(event) => {
+              const selected = [...event.target.files];
+              setFiles(selected);
+              upload(selected);
+            }}
+          />
+        </div>
+
+        <div className="panel text-panel inner">
+          <h3>也可以直接粘贴文字</h3>
+          <p>适合补充会议纪要、用户反馈、商单进度、待办事项。</p>
+          <textarea
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="例如：小红书咨询多但成交慢；今天收到品牌方报价；周五前要交付复盘。"
+          />
+          <button className="primary-btn" onClick={() => upload(files)}>读取并进入分析</button>
+        </div>
+      </div>
+
+      <div className="file-row">
+        {files.length ? files.map((file) => <span key={file.name}>{file.name}</span>) : <span>未上传时默认使用演示数据，方便先看效果。</span>}
+      </div>
+
+      {tasks.length ? (
+        <div className="task-hints">
+          {tasks.slice(0, 3).map((task, index) => (
+            <div key={`${task.title}-${index}`} className="task-hint">
+              <strong>{task.title}</strong>
+              <small>{task.detail || task.due_at || "已加入后续分析线索"}</small>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {notice && <div className="notice">{notice}</div>}
+    </div>
+  );
+}
+
+function ChatPage({ datasetId, setDatasetId, setMapping, setPage }) {
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [listening, setListening] = useState(false);
+  const [voiceTip, setVoiceTip] = useState("");
   const bottomRef = useRef(null);
+  const recognitionRef = useRef(null);
+
+  function speakReply(text) {
+    if (!text || typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new window.SpeechSynthesisUtterance(text.slice(0, 140));
+    utterance.lang = "zh-CN";
+    utterance.rate = 1;
+    window.speechSynthesis.speak(utterance);
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -143,11 +256,75 @@ function ChatPage({ datasetId }) {
         artifact: data.user_artifact,
         validation: data.validation_report
       }]);
+      speakReply(data.reply);
     } catch (error) {
       setMessages((prev) => [...prev, { role: "assistant", content: error.message, error: true }]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function sendVoice(transcript) {
+    const text = transcript.trim();
+    if (!text || loading) return;
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setLoading(true);
+    setVoiceTip("正在把语音转成经营建议…");
+    try {
+      const data = await apiPost("/api/v4/voice/turn", {
+        session_id: sessionId,
+        dataset_id: datasetId,
+        transcript: text,
+        stack: "pipecat"
+      });
+      setSessionId(data.session_id || sessionId);
+      setMessages((prev) => [...prev, {
+        role: "assistant",
+        content: data.reply,
+        artifact: data.user_artifact
+      }]);
+      speakReply(data.reply);
+    } catch (error) {
+      setMessages((prev) => [...prev, { role: "assistant", content: error.message, error: true }]);
+    } finally {
+      setLoading(false);
+      setVoiceTip("");
+    }
+  }
+
+  function toggleVoice() {
+    const Recognition = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
+    if (!Recognition) {
+      setVoiceTip("当前浏览器不支持直接语音输入，请改用 Chrome 或 Edge。");
+      return;
+    }
+    if (listening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setListening(false);
+      return;
+    }
+    const recognition = new Recognition();
+    recognition.lang = "zh-CN";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => {
+      setListening(true);
+      setVoiceTip("正在听，请直接说出经营问题。");
+    };
+    recognition.onresult = (event) => {
+      const transcript = event?.results?.[0]?.[0]?.transcript || "";
+      setInput(transcript);
+      sendVoice(transcript);
+    };
+    recognition.onerror = () => {
+      setVoiceTip("没有听清楚，可以再说一次。");
+      setListening(false);
+    };
+    recognition.onend = () => {
+      setListening(false);
+    };
+    recognitionRef.current = recognition;
+    recognition.start();
   }
 
   const starters = [
@@ -162,9 +339,18 @@ function ChatPage({ datasetId }) {
         <div>
           <span className="eyebrow">对话分析</span>
           <h1>经营问题，直接问</h1>
-          <p>上传数据后，用自然语言提问。系统会完成分析校验，并给出可执行的行动建议；支持多轮追问。</p>
+          <p>先直接提问，再决定要不要补资料。首页只保留对话，把注意力放在“下一步该做什么”。</p>
         </div>
       </header>
+      <div className="chat-topbar">
+        <div className="chat-topbar-copy">
+          <strong>{datasetId ? "当前已接入可分析数据" : "当前使用演示数据，可直接开始提问"}</strong>
+          <span>如果需要补充截图、表格或文字，再进入上传页。</span>
+        </div>
+        <button className="primary-btn subtle" type="button" onClick={() => setPage("upload")}>
+          去上传资料
+        </button>
+      </div>
 
       <div className="chat-starters">
         {starters.map((item) => (
@@ -211,8 +397,15 @@ function ChatPage({ datasetId }) {
             }
           }}
         />
-        <button className="primary-btn" type="button" disabled={loading} onClick={() => send()}>发送</button>
+        <div className="chat-actions">
+          <button className={`voice-btn ${listening ? "active" : ""}`} type="button" onClick={toggleVoice}>
+            {listening ? <MicOff size={16} /> : <Mic size={16} />}
+            <span>{listening ? "停止录音" : "语音提问"}</span>
+          </button>
+          <button className="primary-btn" type="button" disabled={loading} onClick={() => send()}>发送</button>
+        </div>
       </div>
+      {voiceTip ? <div className="voice-tip">{voiceTip}</div> : null}
     </section>
   );
 }
@@ -252,80 +445,23 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
   );
 }
 
-function UploadPage({ datasetId, setDatasetId, setMapping, setPage }) {
-  const inputRef = useRef(null);
-  const [files, setFiles] = useState([]);
-  const [text, setText] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState("");
-
-  async function upload(selected) {
-    if (!selected.length && !text.trim()) return;
-    setLoading(true);
-    setNotice("正在映射字段，不会在前台暴露原始数据。");
-    const form = new FormData();
-    selected.forEach((file) => form.append("files", file));
-    form.append("text", text);
-    try {
-      const res = await fetch("/api/upload", { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "上传失败");
-      setDatasetId(data.dataset_id);
-      setMapping(data.mapping);
-      cache.clear();
-      setNotice("已完成字段映射，可以进入对话分析或经营诊断。");
-      setTimeout(() => setPage("chat"), 450);
-    } catch (error) {
-      setNotice(error.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
+function UploadPage({ datasetId, mapping, setDatasetId, setMapping, setPage }) {
   return (
     <section className="page">
       <header className="page-head">
         <div>
           <span className="eyebrow">上传</span>
-          <h1>上传创作者经营数据</h1>
-          <p>支持 CSV / Excel / ZIP。系统只展示映射摘要和经营结论，不展示原始明细。</p>
+          <h1>补充资料</h1>
+          <p>这里适合一次性补齐更多表格、截图和反馈资料；首页则更适合直接开始提问。</p>
         </div>
       </header>
-
-      <div className="upload-card" onClick={() => inputRef.current?.click()}>
-        {loading ? <Loader2 className="spin" size={34} /> : <UploadCloud size={38} />}
-        <strong>{loading ? "正在处理" : "点击上传 CSV / Excel / ZIP"}</strong>
-        <span>内容表现、收入、用户反馈、对照实验都可以上传；ZIP 会自动拆包识别。</span>
-        <input
-          ref={inputRef}
-          type="file"
-          multiple
-          accept=".csv,.xlsx,.xls,.zip"
-          onChange={(event) => {
-            const selected = [...event.target.files];
-            setFiles(selected);
-            upload(selected);
-          }}
-        />
-      </div>
-
-      <div className="file-row">
-        {files.length ? files.map((file) => <span key={file.name}>{file.name}</span>) : <span>未上传时使用内置演示数据。</span>}
-      </div>
-
-      <div className="panel text-panel">
-        <h3>也可以直接粘贴文字</h3>
-        <p>适合后台摘要、用户反馈、商单记录、复盘笔记。系统会抽取关键词并进入知识图谱。</p>
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder="例如：小红书咨询很多但成交慢，用户反馈价格不清楚；B站长视频收藏高，适合做课程入口。"
-        />
-        <button className="primary-btn" onClick={() => upload(files)}>读取文字并分析</button>
-      </div>
-
-      {notice && <div className="notice">{notice}</div>}
-      <MappingSummary mapping={datasetId ? null : undefined} />
+      <DataIntakePanel
+        datasetId={datasetId}
+        setDatasetId={setDatasetId}
+        setMapping={setMapping}
+        setPage={setPage}
+      />
+      <MappingSummary mapping={mapping} />
     </section>
   );
 }
@@ -557,9 +693,9 @@ function AgentPage({ datasetId, questionId }) {
       <div className="agent-grid">
         <div className="panel">
           <span className="eyebrow">知识图谱</span>
-          <h3>{data?.kg?.summary?.node_count || 0} 个实体，{data?.kg?.summary?.edge_count || 0} 条关系</h3>
+          <h3>先看清关系，再决定要不要放大</h3>
           <p>{data?.kg?.summary?.explanation}</p>
-          <GraphSvg nodes={data?.kg?.nodes || []} edges={data?.kg?.edges || []} />
+          <KnowledgeDigest kg={data?.kg} dag={data?.dag} />
         </div>
         <div className="panel">
           <span className="eyebrow">候选关系图</span>
@@ -609,30 +745,58 @@ function AgentPage({ datasetId, questionId }) {
   );
 }
 
-function GraphSvg({ nodes, edges }) {
-  const picked = nodes.slice(0, 18);
-  const center = { x: 210, y: 130 };
-  const points = picked.map((node, index) => {
-    const angle = (Math.PI * 2 * index) / Math.max(1, picked.length);
-    const radius = node.type === "内容" ? 104 : 78;
-    return { ...node, x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius };
-  });
-  const map = new Map(points.map((node) => [node.id, node]));
+function KnowledgeDigest({ kg, dag }) {
+  const topTopics = (kg?.summary?.top_topics || []).slice(0, 4);
+  const nodeTypes = kg?.summary?.node_types || {};
+  const topContent = (kg?.nodes || [])
+    .filter((node) => node.type === "内容")
+    .sort((a, b) => Number(b.revenue || 0) - Number(a.revenue || 0))
+    .slice(0, 3);
+  const paths = (dag?.edges || []).slice(0, 4);
   return (
-    <svg className="graph-svg" viewBox="0 0 420 260" role="img" aria-label="知识图谱可视化">
-      {edges.slice(0, 36).map((edge, index) => {
-        const source = map.get(edge.source);
-        const target = map.get(edge.target);
-        if (!source || !target) return null;
-        return <line key={index} x1={source.x} y1={source.y} x2={target.x} y2={target.y} />;
-      })}
-      {points.map((node) => (
-        <g key={node.id}>
-          <circle cx={node.x} cy={node.y} r={node.type === "内容" ? 12 : 9} />
-          <text x={node.x + 12} y={node.y + 4}>{node.label.slice(0, 10)}</text>
-        </g>
-      ))}
-    </svg>
+    <div className="knowledge-digest">
+      <div className="knowledge-stats">
+        <div className="digest-card">
+          <span>实体</span>
+          <strong>{kg?.summary?.node_count || 0}</strong>
+          <small>内容 {nodeTypes["内容"] || 0}｜主题 {nodeTypes["主题"] || 0}｜特征 {nodeTypes["特征"] || 0}</small>
+        </div>
+        <div className="digest-card">
+          <span>关系</span>
+          <strong>{kg?.summary?.edge_count || 0}</strong>
+          <small>用于解释主题、内容、特征与结果之间的连接。</small>
+        </div>
+      </div>
+      <div className="knowledge-columns">
+        <div className="digest-list">
+          <h4>最强主题</h4>
+          {topTopics.map((topic) => (
+            <div key={topic.label} className="digest-item">
+              <strong>{topic.label}</strong>
+              <small>累计收入 ¥{formatNumber(topic.revenue)}</small>
+            </div>
+          ))}
+        </div>
+        <div className="digest-list">
+          <h4>高价值内容</h4>
+          {topContent.map((item) => (
+            <div key={item.id} className="digest-item">
+              <strong>{item.label.slice(0, 22)}</strong>
+              <small>收入 ¥{formatNumber(item.revenue)}｜成交 {formatNumber(item.conversions)}</small>
+            </div>
+          ))}
+        </div>
+        <div className="digest-list">
+          <h4>关键路径</h4>
+          {paths.map((edge, index) => (
+            <div key={`${edge.source}-${edge.target}-${index}`} className="digest-item arrow">
+              <strong>{cn(edge.source)} → {cn(edge.target)}</strong>
+              <small>影响强度 {Number(edge.weight || 0).toFixed(2)}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -729,7 +893,7 @@ function LoadingPage({ title }) {
 }
 
 function App() {
-  const [page, setPage] = useState("upload");
+  const [page, setPage] = useState("chat");
   const [collapsed, setCollapsed] = useState(false);
   const [datasetId, setDatasetId] = useState(null);
   const [mapping, setMapping] = useState(null);
@@ -753,8 +917,8 @@ function App() {
     <div className="shell">
       <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
       <main className={collapsed ? "expanded" : ""}>
-        {page === "upload" && <UploadPage datasetId={datasetId} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
-        {page === "chat" && <ChatPage datasetId={datasetId} />}
+        {page === "upload" && <UploadPage datasetId={datasetId} mapping={mapping} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
+        {page === "chat" && <ChatPage datasetId={datasetId} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
         {page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
         {page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
         {page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}
