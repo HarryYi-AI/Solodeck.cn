@@ -18,4 +18,9 @@ solo_creator_agent/data/uploads/
 solo_creator_agent/data/audit_logs/
 data/solodeck_memory/
 data/solodeck_v3_memory/
+data/solodeck_v4_sessions/
+agent_state.json
+task_board.json
+.workbench-version
+learn/
 .bin/

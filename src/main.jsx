@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, CheckCircle2, FileUp, Loader2, PauseCircle, Rocket, ShieldCheck, UploadCloud } from "lucide-react";
+import { ArrowRight, CheckCircle2, FileUp, Loader2, MessageSquare, PauseCircle, Rocket, ShieldCheck, UploadCloud } from "lucide-react";
 import "./styles.css";
 
 const pages = [
   { id: "upload", label: "上传数据", icon: FileUp },
+  { id: "chat", label: "对话分析", icon: MessageSquare },
   { id: "diagnose", label: "经营诊断", icon: ShieldCheck },
   { id: "decision", label: "决策检查", icon: CheckCircle2 },
   { id: "agent", label: "图谱与因果", icon: ArrowRight },
@@ -70,7 +71,8 @@ function ciStatus(effect) {
 
 async function apiPost(path, body) {
   const key = `${path}:${JSON.stringify(body || {})}`;
-  if (cache.has(key)) return cache.get(key);
+  const noCache = path.includes("/api/v4/chat");
+  if (!noCache && cache.has(key)) return cache.get(key);
   const promise = fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -102,6 +104,174 @@ function prefetchAnalysis(datasetId, questionId) {
   apiPost("/api/action-plan", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
 }
 
+function ChatPage({ datasetId }) {
+  const [sessionId, setSessionId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [meta, setMeta] = useState(null);
+  const [voiceStack, setVoiceStack] = useState("pipecat");
+  const [stacks, setStacks] = useState([]);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    fetch("/api/v4/voice/stacks").then((r) => r.json()).then((d) => {
+      setStacks(d.stacks || []);
+      if (d.default) setVoiceStack(d.default);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  async function send(preset) {
+    const text = (preset || input).trim();
+    if (!text || loading) return;
+    setInput("");
+    setMessages((prev) => [...prev, { role: "user", content: text }]);
+    setLoading(true);
+    try {
+      const data = await apiPost("/api/v4/chat", {
+        session_id: sessionId,
+        dataset_id: datasetId,
+        message: text
+      });
+      setSessionId(data.session_id);
+      setMeta({
+        cost: data.session_cost_total,
+        risk: data.risk_profile,
+        tools: data.tool_calls,
+        plan: data.plan_steps,
+        traceId: data.trace_id
+      });
+      setMessages((prev) => [...prev, {
+        role: "assistant",
+        content: data.reply,
+        artifact: data.user_artifact,
+        validation: data.validation_report,
+        postWriter: data.post_writer_validation
+      }]);
+    } catch (error) {
+      setMessages((prev) => [...prev, { role: "assistant", content: error.message, error: true }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const starters = [
+    "小红书痛点标题是不是比教程标题更能带来咨询？",
+    "那个平台转化更好？",
+    "继续算一下上周的收入趋势"
+  ];
+
+  const activeStack = stacks.find((s) => s.id === voiceStack);
+
+  return (
+    <section className="page chat-page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow">SoloDeck v4</span>
+          <h1>多轮对话分析</h1>
+          <p>支持追问、工具编排与上下文压缩。语音接入可选三档栈（LiveKit / Pipecat / 边缘离线）。</p>
+        </div>
+        {meta && (
+          <div className="chat-meta">
+            <span>会话 {sessionId?.slice(0, 10)}…</span>
+            <span>累计成本 {Number(meta.cost || 0).toFixed(2)}</span>
+            {meta.risk?.high_risk && <span className="risk-badge">深度校验</span>}
+            {meta.risk?.reuse_cache && <span className="cache-badge">缓存复用</span>}
+          </div>
+        )}
+      </header>
+
+      {stacks.length ? (
+        <div className="panel voice-stack-panel">
+          <span className="eyebrow">语音栈（接入参考）</span>
+          <div className="voice-stack-tabs">
+            {stacks.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={voiceStack === s.id ? "active" : ""}
+                onClick={() => setVoiceStack(s.id)}
+              >
+                {s.name}
+              </button>
+            ))}
+          </div>
+          {activeStack ? (
+            <p className="voice-stack-detail">
+              {activeStack.transport} · {activeStack.stt} · {activeStack.llm} · {activeStack.tts}
+              <br />
+              延迟目标 <strong>{activeStack.latency?.e2e_label}</strong> · {activeStack.license}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="chat-starters">
+        {starters.map((item) => (
+          <button key={item} className="chip-btn" type="button" onClick={() => send(item)}>{item}</button>
+        ))}
+      </div>
+
+      <div className="chat-panel">
+        {messages.length === 0 && (
+          <div className="chat-empty">
+            <MessageSquare size={28} />
+            <p>用口语提问即可。系统会自动编译任务、调用工具、验证结论并生成行动建议。</p>
+          </div>
+        )}
+        {messages.map((msg, index) => (
+          <article key={index} className={`chat-bubble ${msg.role}${msg.error ? " error" : ""}`}>
+            <span className="chat-role">{msg.role === "user" ? "你" : "SoloDeck"}</span>
+            <p>{msg.content}</p>
+            {msg.artifact?.action_cards?.length ? (
+              <div className="chat-cards">
+                {msg.artifact.action_cards.slice(0, 2).map((card, i) => (
+                  <div key={i} className="mini-card">
+                    <strong>{cn(card.title || card.action)}</strong>
+                    <small>{card.next_step || card.explanation}</small>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </article>
+        ))}
+        {loading && <div className="chat-loading"><Loader2 className="spin" size={18} /> 正在编排工具链…</div>}
+        <div ref={bottomRef} />
+      </div>
+
+      {meta?.plan?.length ? (
+        <div className="panel chat-plan">
+          <span className="eyebrow">任务编排</span>
+          <div className="plan-steps">
+            {meta.plan.map((step) => (
+              <span key={step.id}>{step.goal}</span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="chat-input-row">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="继续追问，例如：那个平台呢？换成成交数再看一遍。"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send();
+            }
+          }}
+        />
+        <button className="primary-btn" type="button" disabled={loading} onClick={() => send()}>发送</button>
+      </div>
+    </section>
+  );
+}
+
 function Sidebar({ page, setPage, collapsed, setCollapsed }) {
   return (
     <>
@@ -113,7 +283,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
           <span className="logo" />
           <div>
             <strong>SoloDeck</strong>
-            <small>Northstar Labs</small>
+            <small>v4 · Northstar Labs</small>
           </div>
         </div>
         <p className="side-copy">把数据变成下一步可执行计划。</p>
@@ -158,8 +328,8 @@ function UploadPage({ datasetId, setDatasetId, setMapping, setPage }) {
       setDatasetId(data.dataset_id);
       setMapping(data.mapping);
       cache.clear();
-      setNotice("已完成字段映射，可以进入经营诊断。");
-      setTimeout(() => setPage("diagnose"), 450);
+      setNotice("已完成字段映射，可以进入对话分析或经营诊断。");
+      setTimeout(() => setPage("chat"), 450);
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -173,19 +343,19 @@ function UploadPage({ datasetId, setDatasetId, setMapping, setPage }) {
         <div>
           <span className="eyebrow">上传</span>
           <h1>上传创作者经营数据</h1>
-          <p>支持 CSV / Excel。系统只展示映射摘要和经营结论，不展示原始明细。</p>
+          <p>支持 CSV / Excel / ZIP。系统只展示映射摘要和经营结论，不展示原始明细。</p>
         </div>
       </header>
 
       <div className="upload-card" onClick={() => inputRef.current?.click()}>
         {loading ? <Loader2 className="spin" size={34} /> : <UploadCloud size={38} />}
-        <strong>{loading ? "正在处理" : "点击上传 CSV / Excel"}</strong>
-        <span>内容表现、收入、用户反馈、对照实验都可以上传。</span>
+        <strong>{loading ? "正在处理" : "点击上传 CSV / Excel / ZIP"}</strong>
+        <span>内容表现、收入、用户反馈、对照实验都可以上传；ZIP 会自动拆包识别。</span>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept=".csv,.xlsx,.xls"
+          accept=".csv,.xlsx,.xls,.zip"
           onChange={(event) => {
             const selected = [...event.target.files];
             setFiles(selected);
@@ -639,6 +809,7 @@ function App() {
       <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
       <main className={collapsed ? "expanded" : ""}>
         {page === "upload" && <UploadPage datasetId={datasetId} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
+        {page === "chat" && <ChatPage datasetId={datasetId} />}
         {page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
         {page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
         {page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}

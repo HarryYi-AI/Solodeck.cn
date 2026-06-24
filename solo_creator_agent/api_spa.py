@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import zipfile
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 ROOT = Path(__file__).resolve().parent
+REPO_ROOT = ROOT.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 sys.path.append(str(ROOT))
 
 from src.agent_orchestrator import find_synthetic_data_dir
@@ -23,9 +27,12 @@ from src.mock_data import generate_all
 from src.skills import dataset_fingerprint, run_skill_pipeline
 from solodeck.workflows.data_agent_graph import run_data_agent_graph
 from solodeck_v3.workflows.data_agent_graph import run_v3_data_agent
+from solodeck_v4.runtime.runner import create_session, run_v4_agent
+from solodeck_v4.tools.registry import list_tools
+from solodeck_v4.session.store import get_session
 
 
-app = FastAPI(title="SoloDeck Skill API", version="1.0")
+app = FastAPI(title="SoloDeck Skill API", version="4.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -37,6 +44,7 @@ app.add_middleware(
 DATASETS: dict[str, pd.DataFrame] = {}
 TEXTS: dict[str, str] = {}
 ANALYSIS_CACHE: dict[str, dict[str, Any]] = {}
+V4_SESSIONS: dict[str, str] = {}
 
 
 def _json_safe(value: Any) -> Any:
@@ -71,6 +79,24 @@ def _read_file(file: UploadFile, data: bytes) -> pd.DataFrame:
     if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(BytesIO(data))
     return pd.read_csv(BytesIO(data))
+
+
+def _read_frames(file: UploadFile, data: bytes) -> list[pd.DataFrame]:
+    name = (file.filename or "").lower()
+    if name.endswith(".zip"):
+        frames: list[pd.DataFrame] = []
+        with zipfile.ZipFile(BytesIO(data)) as archive:
+            for member in archive.namelist():
+                member_name = member.lower()
+                if member_name.endswith("/"):
+                    continue
+                payload = archive.read(member)
+                if member_name.endswith(".csv"):
+                    frames.append(pd.read_csv(BytesIO(payload)))
+                elif member_name.endswith((".xlsx", ".xls")):
+                    frames.append(pd.read_excel(BytesIO(payload)))
+        return frames
+    return [_read_file(file, data)]
 
 
 def _text_to_frame(text: str) -> pd.DataFrame:
@@ -150,14 +176,18 @@ async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(de
     for file in files:
         data = await file.read()
         try:
-            frames.append(_read_file(file, data))
+            parsed = _read_frames(file, data)
+            if not parsed:
+                notes.append(f"{file.filename} 中没有可读取的 CSV/Excel 文件。")
+                continue
+            frames.extend(parsed)
         except Exception as exc:
             notes.append(f"{file.filename} 未能读取：{exc}")
     text_frame = _text_to_frame(text)
     if not text_frame.empty:
         frames.append(text_frame)
     if not frames:
-        return JSONResponse({"error": "没有可读取的 CSV/Excel 文件或文字。", "notes": notes}, status_code=400)
+        return JSONResponse({"error": "没有可读取的 CSV、Excel、ZIP 文件或文字。", "notes": notes}, status_code=400)
     df = pd.concat(frames, ignore_index=True, sort=False)
     did = dataset_fingerprint(df)
     DATASETS[did] = df
@@ -264,3 +294,130 @@ async def v3_agent(payload: dict[str, Any]) -> JSONResponse:
         "failure_report": result.get("failure_report", {}),
     }
     return JSONResponse(_json_safe(safe))
+
+
+@app.post("/api/voice-simulate")
+async def voice_simulate(payload: dict[str, Any]) -> JSONResponse:
+    """Optional Pipecat-shaped voice stub — does not affect v3-agent."""
+    from solodeck_v3.voice.gateway import make_v3_runner, simulate_turn
+
+    did, df = _get_df(payload.get("dataset_id"))
+    transcript = payload.get("transcript") or payload.get("text") or ""
+    use_v3 = bool(payload.get("run_v3", False))
+    runner = make_v3_runner(df, TEXTS.get(did, "")) if use_v3 else None
+    columns = list(df.columns) if not df.empty else ["platform", "title_style", "consultations"]
+    result = simulate_turn(transcript, runner=runner, columns=columns)
+    return JSONResponse(_json_safe(result))
+
+
+@app.post("/api/eval/layered")
+async def layered_eval_api(payload: dict[str, Any]) -> JSONResponse:
+    """Optional layered evaluation on a fresh or cached v3 run."""
+    from solodeck_v3.bench.layered_eval import run_layered_eval
+
+    did, df = _get_df(payload.get("dataset_id"))
+    task = payload.get("task") or payload.get("user_goal") or "评估内容策略并生成行动建议。"
+    result = run_v3_data_agent(task, df, text=TEXTS.get(did, ""), max_revisions=int(payload.get("max_revisions", 1)))
+    layered = run_layered_eval(result, task=task)
+    return JSONResponse(_json_safe({"trace_id": result.get("trace_id"), "layered": layered}))
+
+
+@app.post("/api/v4/session")
+async def v4_create_session(payload: dict[str, Any]) -> JSONResponse:
+    did, _ = _get_df(payload.get("dataset_id"))
+    session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
+    V4_SESSIONS[session["session_id"]] = did
+    return JSONResponse(_json_safe(session))
+
+
+@app.get("/api/v4/session/{session_id}")
+async def v4_get_session(session_id: str) -> JSONResponse:
+    session = get_session(session_id)
+    if not session:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    return JSONResponse(_json_safe(session))
+
+
+@app.get("/api/v4/tools")
+async def v4_tools() -> JSONResponse:
+    return JSONResponse(_json_safe({"tools": list_tools(), "version": "4.0.0"}))
+
+
+@app.post("/api/v4/chat")
+async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
+    message = (payload.get("message") or payload.get("task") or "").strip()
+    if not message:
+        return JSONResponse({"error": "message required"}, status_code=400)
+    session_id = payload.get("session_id")
+    if not session_id:
+        did, _ = _get_df(payload.get("dataset_id"))
+        session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
+        session_id = session["session_id"]
+        V4_SESSIONS[session_id] = did
+    did = V4_SESSIONS.get(session_id) or payload.get("dataset_id")
+    _, df = _get_df(did)
+    result = run_v4_agent(message, df, session_id, text=TEXTS.get(did or "", ""))
+    safe = {
+        "session_id": result.get("session_id"),
+        "trace_id": result.get("trace_id"),
+        "reply": result.get("reply"),
+        "user_artifact": result.get("user_artifact"),
+        "developer_trace": result.get("developer_trace"),
+        "task_spec": result.get("task_spec"),
+        "plan_steps": result.get("plan_steps"),
+        "tool_calls": result.get("tool_calls"),
+        "risk_profile": result.get("risk_profile"),
+        "validation_report": result.get("validation_report"),
+        "post_writer_validation": result.get("post_writer_validation"),
+        "cost_spent": result.get("cost_spent"),
+        "session_cost_total": result.get("session_cost_total"),
+        "version": result.get("version"),
+    }
+    return JSONResponse(_json_safe(safe))
+
+
+@app.get("/api/v4/voice/stacks")
+async def v4_voice_stacks() -> JSONResponse:
+    from solodeck_v4.voice.stacks import list_stacks
+
+    return JSONResponse(_json_safe({"stacks": list_stacks(), "default": "pipecat"}))
+
+
+@app.post("/api/v4/voice/turn")
+async def v4_voice_turn(payload: dict[str, Any]) -> JSONResponse:
+    """Text-in simulation: STT transcript → v4 chat → TTS word preview."""
+    from solodeck_v4.voice.gateway import make_v4_runner, simulate_voice_turn, stack_wiring_notes
+    from solodeck_v4.voice.stacks import get_stack
+
+    transcript = (payload.get("transcript") or payload.get("text") or "").strip()
+    if not transcript:
+        return JSONResponse({"error": "transcript required"}, status_code=400)
+    stack_id = payload.get("stack") or payload.get("stack_id") or "pipecat"
+    stack = get_stack(stack_id)
+
+    session_id = payload.get("session_id")
+    if not session_id:
+        did, _ = _get_df(payload.get("dataset_id"))
+        session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
+        session_id = session["session_id"]
+        V4_SESSIONS[session_id] = did
+    did = V4_SESSIONS.get(session_id) or payload.get("dataset_id")
+    _, df = _get_df(did)
+
+    runner = make_v4_runner(df, session_id, TEXTS.get(did or "", ""))
+    columns = list(df.columns) if not df.empty else ["platform", "title_style", "consultations"]
+    result = simulate_voice_turn(
+        transcript,
+        stack_id=stack.id,
+        runner=runner,
+        columns=columns,
+        session={"session_id": session_id},
+    )
+    if not transcript.startswith("请再说一遍"):
+        agent = run_v4_agent(transcript, df, session_id, text=TEXTS.get(did or "", ""))
+        result["reply"] = agent.get("reply")
+        result["user_artifact"] = agent.get("user_artifact")
+        result["session_id"] = session_id
+        result["tts_preview"] = (result.get("reply") or "")[:280].split()
+    result["wiring_notes"] = stack_wiring_notes(stack)
+    return JSONResponse(_json_safe(result))

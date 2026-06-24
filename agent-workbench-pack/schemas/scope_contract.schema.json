@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SoloDeckScopeContract",
+  "type": "object",
+  "properties": {
+    "allowed_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "forbidden_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "default": {
+    "allowed_paths": [
+      "solodeck_v3/",
+      "solo_creator_agent/",
+      "data/solodeck_v3_memory/",
+      "agent-workbench-pack/"
+    ],
+    "forbidden_paths": [
+      "solo_creator_agent/scripts/release.sh",
+      ".env"
+    ]
+  }
+}

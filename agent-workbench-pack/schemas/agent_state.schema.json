@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SoloDeckDataAgentState",
+  "type": "object",
+  "properties": {
+    "trace_id": { "type": "string" },
+    "task": { "type": "string" },
+    "task_spec": { "type": "object" },
+    "validation_report": { "type": "object" },
+    "user_artifact": { "type": "object" },
+    "developer_trace": { "type": "object" },
+    "memory_updates": { "type": "array" }
+  },
+  "required": ["trace_id", "task"]
+}
