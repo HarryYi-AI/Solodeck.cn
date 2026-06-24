@@ -1,0 +1,25 @@
+# FastAPI backend for www.solodeck.cn (SPA + /api/v4/*)
+# Install:
+#   sudo cp solo_creator_agent/deploy/solodeck-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now solodeck-api
+#
+# Adjust paths if your repo is not at /workspace/ylj/harry_main/heikesong
+
+[Unit]
+Description=SoloDeck FastAPI (api_spa + v4)
+After=network.target
+
+[Service]
+Type=simple
+User=ylj
+Group=ylj
+WorkingDirectory=/workspace/ylj/harry_main/heikesong
+EnvironmentFile=/workspace/ylj/harry_main/heikesong/.env
+Environment=PYTHONPATH=/workspace/ylj/harry_main/heikesong
+ExecStart=/usr/bin/python3 -m uvicorn solo_creator_agent.api_spa:app --host 127.0.0.1 --port 8787
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
