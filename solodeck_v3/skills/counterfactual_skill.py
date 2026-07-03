@@ -17,6 +17,4 @@ class CounterfactualSkill(BaseSkill):
             "safe_interpretation": "这是基于当前样本的反事实模拟，不是承诺结果。",
             "requires_validation": effect.get("ci_95", [0, 0])[0] <= 0 <= effect.get("ci_95", [0, 0])[1],
         }
-        state.setdefault("artifacts", []).append({"id": "counterfactual_simulation", "type": "counterfactual", "content": simulation})
         return SkillOutput("counterfactual_simulation", "counterfactual", simulation)
-

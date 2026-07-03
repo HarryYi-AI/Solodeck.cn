@@ -48,3 +48,23 @@ Causal readiness, bootstrap CI, causal validators and repair nodes downgrade uns
 
 BI reports what happened. A normal LLM agent may answer directly. SoloDeck v3 creates verifiable workflows with traceable artifacts, validation, repair, rewards and memory updates.
 
+## 13. What kind of RAG does SoloDeck use?
+
+SoloDeck uses **Data-Agent Retrieval**, not generic document RAG. v4 retrieves structured evidence from schema memory, KG edges, prior artifacts, session turns, and optional text feedback chunks (`solodeck_v4/retrieval/`). Retrieval is intent-routed (schema / metric / relationship / causal / previous-result / text-feedback) and packed into an evidence object with scores and provenance.
+
+## 14. Why is it not traditional document RAG?
+
+Creator analytics questions need **typed, verifiable evidence** (columns, CI reports, DAG edges, validation artifacts), not arbitrary PDF chunks. Traditional RAG cannot guarantee metric lineage or causal readiness. SoloDeck retrieval feeds Python Skills and validators instead of letting an LLM answer from unstructured passages alone.
+
+## 15. What is the difference between graph retrieval, artifact retrieval, and text retrieval?
+
+- **Graph retrieval** (`kg_retriever.py`): 1–2 hop neighbors from `kg_edges.json` with relations like `may_confound`, `may_affect`, `derived_from`, `generated_by`.
+- **Artifact retrieval** (`artifact_retriever.py`): prior analysis outputs, bootstrap CI, causal readiness, validation reports, and action cards ranked by task type, variable match, and recency.
+- **Text retrieval** (`text_retriever.py`): BM25-like keyword search over user feedback chunks; optional sentence-transformers embeddings if installed.
+
+## 16. What is currently implemented and what is future work?
+
+**Implemented:** intent router, five memory stores under `data/memory/`, BM25 text retrieval with embedding fallback, KG multi-hop retrieval, artifact/session ranking, evidence pack + citation validator, developer trace retrieval panel.
+
+**Future work:** live sync from v3 JSONL memory writers into `data/memory/`, dense vector index service, cross-session artifact deduplication, retrieval-aware SkillOpt-style skill documents ([SkillOpt](https://github.com/microsoft/SkillOpt)), and automatic write-back of retrieval logs for offline skill optimization.
+

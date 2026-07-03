@@ -7,8 +7,36 @@ ToolFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
 
 
 def _tool_retrieve_memory(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-    ctx = state.get("compressed_context") or {}
-    return {"ok": True, "memory": ctx, "cost": 0.01}
+    from solodeck_v4.retrieval.retrieval_router import retrieve_memory
+    from solodeck_v4.session.store import get_session
+
+    session = get_session(state.get("session_id", "")) or {}
+    task_spec = state.get("task_spec") or session.get("last_task_spec") or {}
+    pack = retrieve_memory(
+        state.get("message", ""),
+        task_spec,
+        entity_link=state.get("entity_link"),
+        session=session,
+        artifact_cache=state.get("artifact_cache"),
+    )
+    state["evidence_pack"] = pack
+    state["retrieved_memory"] = pack
+    _apply_retrieval_hints(state, pack)
+    return {"ok": True, "evidence_pack": pack, "cost": 0.02}
+
+
+def _apply_retrieval_hints(state: dict[str, Any], pack: dict[str, Any]) -> None:
+    schema_hits = [e for e in pack.get("evidence", []) if e.get("source_type") == "schema"]
+    if schema_hits and not state.get("schema_summary"):
+        cols = []
+        for hit in schema_hits:
+            col = (hit.get("meta") or {}).get("column")
+            if col:
+                cols.append(col)
+        if cols:
+            state["schema_summary"] = {"columns": list(dict.fromkeys(cols))}
+    if pack.get("warnings"):
+        state.setdefault("retrieval_warnings", []).extend(pack["warnings"])
 
 
 def _tool_compile_task(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -30,7 +58,21 @@ def _tool_compile_task(state: dict[str, Any], args: dict[str, Any]) -> dict[str,
         state.get("linked_entities"),
     )
     state["task_spec"] = spec.to_dict()
-    return {"ok": True, "task_spec": state["task_spec"], "entity_link": state["entity_link"], "cost": 0.02}
+    from solodeck_v4.retrieval.retrieval_router import retrieve_memory
+    from solodeck_v4.session.store import get_session
+
+    session = get_session(state.get("session_id", "")) or {}
+    pack = retrieve_memory(
+        state["message"],
+        state["task_spec"],
+        entity_link=state.get("entity_link"),
+        session=session,
+        artifact_cache=state.get("artifact_cache"),
+    )
+    state["evidence_pack"] = pack
+    state["retrieved_memory"] = pack
+    _apply_retrieval_hints(state, pack)
+    return {"ok": True, "task_spec": state["task_spec"], "entity_link": state["entity_link"], "evidence_pack": pack, "cost": 0.02}
 
 
 def _tool_plan_steps(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -52,6 +94,8 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
 
     spec = state.get("task_spec") or {}
     state["task"] = spec.get("objective") or state.get("message", "")
+    if state.get("force_causal_readiness") and "causal_readiness" not in spec.get("expected_artifacts", []):
+        spec.setdefault("expected_artifacts", []).append("causal_readiness")
     if state.get("reuse_cache") and state.get("artifact_cache"):
         state["artifacts"] = list(state["artifact_cache"].values())
         return {"ok": True, "reused_cache": True, "cost": 0.03}
@@ -109,6 +153,9 @@ def _tool_compose_response(state: dict[str, Any], args: dict[str, Any]) -> dict[
         state["action_cards"] = _action_cards(state)
     state["user_artifact"] = build_user_artifact_view(state)
     state["user_artifact"] = WriterAgent().polish_user_artifact(state["user_artifact"])
+    from solodeck_v4.retrieval.evidence_validator import validate_retrieval_evidence
+
+    state["retrieval_validation"] = validate_retrieval_evidence(state)
     state["developer_trace"] = build_developer_trace_panel(state)
     return {"ok": True, "cost": 0.04}
 
@@ -123,7 +170,7 @@ def _tool_clarify(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]
 
 
 TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "retrieve_memory": {"fn": _tool_retrieve_memory, "description": "Load compressed session and memory context", "cost_hint": 0.01},
+    "retrieve_memory": {"fn": _tool_retrieve_memory, "description": "Retrieve schema/KG/artifact/session/text evidence for the query", "cost_hint": 0.02},
     "compile_task": {"fn": _tool_compile_task, "description": "Compile user message to TaskSpec with entity linking", "cost_hint": 0.02},
     "plan_steps": {"fn": _tool_plan_steps, "description": "Decompose task into orchestrated steps", "cost_hint": 0.02},
     "execute_analysis": {"fn": _tool_execute_analysis, "description": "Run Python Skills pipeline", "cost_hint": 0.1},

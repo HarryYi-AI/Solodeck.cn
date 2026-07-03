@@ -21,6 +21,8 @@ solo_creator_agent/demo_upload_pack/*.zip
 data/solodeck_memory/
 data/solodeck_v3_memory/
 data/solodeck_v4_sessions/
+data/runtime_checkpoints/
+data/memory/
 solodeck_v3/bench/generated_failures/
 agent_state.json
 task_board.json

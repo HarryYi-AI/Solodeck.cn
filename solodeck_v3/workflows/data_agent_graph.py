@@ -64,7 +64,7 @@ def run_v3_data_agent(task: str, df: pd.DataFrame, text: str = "", max_revisions
         state = execute_skills_node(state)
         state = validate_artifacts_node(state)
         state = assign_rewards_node(state)
-        state = reflect_or_repair_node(state)
+        state = reflect_node(state)
     state = generate_final_artifact_node(state)
     state = update_memory_node(state)
     return state

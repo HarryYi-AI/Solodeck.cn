@@ -16,7 +16,6 @@ class BootstrapSkill(BaseSkill):
         query = {"treatment": treatment, "treatment_value": value, "outcome": outcome, "covariates": [c for c in ["platform", "topic", "account_id", "production_hours"] if c in state["df"].columns and c != treatment]}
         effect = EffectEstimationSkill().run(state["df"], query)
         effect["query"] = query
-        state.setdefault("artifacts", []).append({"id": "bootstrap_ci", "type": "bootstrap_ci", "content": effect})
         low, high = effect.get("ci_95", [0, 0])
         if low <= 0 <= high:
             state["critique"] = {**state.get("critique", {}), "unstable_ci": True}

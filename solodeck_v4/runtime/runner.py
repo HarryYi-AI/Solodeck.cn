@@ -12,6 +12,7 @@ from solodeck_v4.verification.post_writer import validate_post_writer
 from solodeck_v3.nlp.entity_linker import link_entities
 from solodeck_v3.reward.process_reward import assign_process_rewards
 from solodeck_v3.runtime.trace_logger import append_trace
+from solodeck_v4.workflows.industrial_runtime import checkpoint, finalize_industrial_runtime, initialize_industrial_state
 
 
 def run_v4_agent(
@@ -38,6 +39,8 @@ def run_v4_agent(
         "tool_calls": [],
         "cost_spent": 0.0,
     }
+    initialize_industrial_state(state)
+    checkpoint(state, "input")
 
     compressed = compress_session_context(session)
     state["compressed_context"] = compressed
@@ -57,13 +60,24 @@ def run_v4_agent(
     state["cost_spent"] += float(compile_result.get("cost", 0))
     state["tool_calls"].append(compile_result)
     append_trace(state, "ToolCall", "ExecutorAgent", {"tool": "compile_task", "ok": compile_result.get("ok")})
+    append_trace(state, "CompileTask", "PlannerAgent", {"task_type": (state.get("task_spec") or {}).get("task_type")})
     task_spec = state.get("task_spec") or {}
+    checkpoint(state, "compiled")
     risk = assess_risk(message, task_spec, session, state["entity_link"])
     state["risk_profile"] = risk
     state["budget"] = risk
     state["reuse_cache"] = risk.get("reuse_cache", False)
 
     append_trace(state, "RiskRoute", "PlannerAgent", risk)
+
+    estimand_missing = _missing_estimand_fields(task_spec)
+    if estimand_missing:
+        state["clarification"] = f"要评估策略增量，还需要确认：{'、'.join(estimand_missing)}。补充后再进行因果估计。"
+        result = call_tool("clarify", state, {"message": state["clarification"]})
+        state["tool_calls"].append(result)
+        reply = state["clarification"]
+        _finalize_session(session_id, session, state, reply)
+        return _package(state, reply)
 
     if risk.get("needs_clarification"):
         result = call_tool("clarify", state, {})
@@ -79,6 +93,7 @@ def run_v4_agent(
     append_trace(state, "ToolCall", "ExecutorAgent", {"tool": "plan_steps", "ok": plan_result.get("ok")})
     state["plan_steps"] = state.get("plan_steps") or plan_task_steps(task_spec, risk)
     tool_sequence = default_tool_sequence(risk)
+    checkpoint(state, "planned")
 
     for tool_name in tool_sequence:
         if tool_name in {"retrieve_memory", "compile_task", "plan_steps"}:
@@ -90,16 +105,29 @@ def run_v4_agent(
         state["cost_spent"] += float(result.get("cost", 0))
         state["tool_calls"].append(result)
         append_trace(state, "ToolCall", "ExecutorAgent", {"tool": tool_name, "ok": result.get("ok")})
+        if tool_name == "execute_analysis":
+            append_trace(state, "ExecuteSkills", "ExecutorAgent", {"skills": result.get("skills", [])})
+        elif tool_name == "validate_artifacts":
+            append_trace(state, "ValidateArtifacts", "VerifierAgent", {"valid": result.get("valid")})
+        checkpoint(state, tool_name)
 
     post = validate_post_writer(state)
     state["post_writer_validation"] = post
     append_trace(state, "PostWriterValidate", "VerifierAgent", post)
+
+    from solodeck_v4.retrieval.evidence_validator import validate_retrieval_evidence
+
+    retrieval_val = validate_retrieval_evidence(state)
+    state["retrieval_validation"] = retrieval_val
+    append_trace(state, "RetrievalValidate", "VerifierAgent", retrieval_val)
 
     rewards = assign_process_rewards(state["trace"], state.get("validation_report") or {"issues": post.get("issues", []), "checks": []})
     state["step_rewards"] = rewards
 
     artifact = state.get("user_artifact") or {}
     reply = _format_reply(artifact, state)
+    finalize_industrial_runtime(state, reply)
+    reply = state["final_answer"]
     _finalize_session(session_id, session, state, reply)
     return _package(state, reply)
 
@@ -126,6 +154,17 @@ def _format_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
     if state.get("reuse_cache"):
         parts.append("（复用上轮分析结果以降低成本）")
     return "\n".join(parts)
+
+
+def _missing_estimand_fields(task_spec: dict[str, Any]) -> list[str]:
+    if task_spec.get("task_type") not in {"causal_effect_estimation", "counterfactual_analysis"}:
+        return []
+    missing = []
+    if not task_spec.get("candidate_treatments"): missing.append("要比较的策略")
+    if not task_spec.get("candidate_outcomes"): missing.append("要观察的指标")
+    if not task_spec.get("unit"): missing.append("分析单位")
+    if not task_spec.get("time"): missing.append("观察时间")
+    return missing
 
 
 def _try_llm_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
@@ -225,9 +264,17 @@ def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
         "validation_report": state.get("validation_report"),
         "post_writer_validation": state.get("post_writer_validation"),
         "step_rewards": state.get("step_rewards"),
+        "industrial_process_reward": state.get("industrial_process_reward"),
         "cost_spent": state.get("cost_spent"),
         "session_cost_total": session.get("cost_spent"),
         "compressed_context": state.get("compressed_context"),
+        "evidence_pack": state.get("evidence_pack"),
+        "retrieval_validation": state.get("retrieval_validation"),
+        "governance_report": state.get("governance_report"),
+        "evidence_level": state.get("evidence_level"),
+        "failure_report": state.get("failure_report"),
+        "memory_updates": state.get("memory_updates"),
+        "skill_manifests": state.get("skill_manifests"),
         "trace": state.get("trace"),
         "version": "4.0.0",
     }

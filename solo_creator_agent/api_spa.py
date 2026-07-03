@@ -422,11 +422,54 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         "risk_profile": result.get("risk_profile"),
         "validation_report": result.get("validation_report"),
         "post_writer_validation": result.get("post_writer_validation"),
+        "governance_report": result.get("governance_report"),
+        "evidence_level": result.get("evidence_level"),
+        "failure_report": result.get("failure_report"),
+        "memory_updates": result.get("memory_updates"),
         "cost_spent": result.get("cost_spent"),
         "session_cost_total": result.get("session_cost_total"),
         "version": result.get("version"),
     }
     return JSONResponse(_json_safe(safe))
+
+
+@app.get("/api/v4/trace/{trace_id}/checkpoints")
+async def v4_trace_checkpoints(trace_id: str) -> JSONResponse:
+    from solodeck_v4.runtime.checkpoint import CheckpointStore
+
+    paths = CheckpointStore().list(trace_id)
+    return JSONResponse({"trace_id": trace_id, "checkpoints": [path.name for path in paths]})
+
+
+@app.get("/api/v4/trace/{trace_id}/replay")
+async def v4_trace_replay(trace_id: str, checkpoint: int = -1) -> JSONResponse:
+    from solodeck_v4.runtime.checkpoint import CheckpointStore
+
+    try:
+        state = CheckpointStore().replay(trace_id, checkpoint)
+    except (KeyError, IndexError):
+        return JSONResponse({"error": "checkpoint not found"}, status_code=404)
+    # Replay inspection excludes uploaded rows and secret-bearing fields.
+    safe = {key: value for key, value in state.items() if key not in {"df", "text", "artifact_cache"}}
+    return JSONResponse(_json_safe(safe))
+
+
+@app.get("/api/v4/memory/trace")
+async def v4_memory_trace(project_id: str = "solodeck", session_id: str | None = None) -> JSONResponse:
+    from solodeck_v4.memory import UnifiedMemory
+
+    rows = UnifiedMemory().export_memory_trace(project_id, session_id)
+    safe = [
+        {
+            "memory_id": row["memory_id"], "memory_type": row["memory_type"],
+            "source_type": row["source_type"], "source_id": row["source_id"],
+            "content_summary": row["content_summary"], "lineage": row["lineage"],
+            "quality_score": row["quality_score"], "warnings": row["warnings"],
+            "version": row["version"], "updated_at": row["updated_at"],
+        }
+        for row in rows
+    ]
+    return JSONResponse(_json_safe({"project_id": project_id, "session_id": session_id, "items": safe}))
 
 
 @app.get("/api/v4/voice/stacks")

@@ -34,11 +34,20 @@ def execute_skill_sequence(state: dict[str, Any], skills: list[str]) -> dict[str
     for skill_name in skills:
         skill_cls = SKILL_REGISTRY[skill_name]
         skill = skill_cls()
+        manifest = skill.manifest().to_dict()
         output: SkillOutput = skill.run(state)
         validation = skill.validate_output(output)
-        artifact = {"id": output.artifact_id, "type": output.artifact_type, "content": output.content, "valid": validation["valid"], "warnings": output.warnings, "generated_by": skill_name}
+        artifact = {
+            "id": output.artifact_id, "type": output.artifact_type,
+            "content": output.content, "valid": validation["valid"],
+            "warnings": output.warnings, "generated_by": skill_name,
+            "source_type": "python", "skill_id": manifest["skill_id"],
+            "skill_version": manifest["version"], "validator_id": "skill_output_validator",
+            "dataset_version": state.get("dataset_version", state.get("trace_id")),
+        }
         if artifact["id"] not in {a.get("id") for a in state.setdefault("artifacts", [])}:
             state["artifacts"].append(artifact)
         outputs.append(artifact)
         state.setdefault("selected_skills", []).append(skill_name)
+        state.setdefault("skill_manifests", {})[skill_name] = manifest
     return {"outputs": outputs, "state": state}

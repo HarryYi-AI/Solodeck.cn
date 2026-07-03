@@ -85,6 +85,9 @@ def compile_user_goal(user_goal: str, structured_data: pd.DataFrame, unstructure
         validation_rules=["artifact", "statistical", "causal", "privacy", "trace", "reward"],
         budget_level=budget,
         expected_artifacts=expected_artifacts,
+        unit=_infer_unit(columns),
+        time=_infer_time(columns),
+        estimand=(f"ATE of {treatments[0]} on {(outcomes or ['revenue'])[0]}" if treatments else None),
     )
 
 
@@ -97,3 +100,17 @@ def _rank_columns(columns: list[str], goal: str, priorities: list[tuple[str, lis
         scored.append((0 if hit else 1, f"{idx:03d}:{col}"))
     ranked = [item.split(":", 1)[1] for _, item in sorted(scored)]
     return ranked
+
+
+def _infer_unit(columns: list[str]) -> str | None:
+    for column in ("content_id", "product_id", "user_id", "account_id", "campaign_id"):
+        if column in columns:
+            return column
+    return "row" if columns else None
+
+
+def _infer_time(columns: list[str]) -> str | None:
+    for column in ("publish_time", "date", "created_at", "timestamp"):
+        if column in columns:
+            return column
+    return None

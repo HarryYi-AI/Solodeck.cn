@@ -34,6 +34,9 @@ class TaskSpec:
     validation_rules: list[str]
     budget_level: str
     expected_artifacts: list[str] = field(default_factory=list)
+    unit: str | None = None
+    time: str | None = None
+    estimand: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

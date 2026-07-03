@@ -66,6 +66,4 @@ def _time_column(df) -> str | None:
 
 
 def _record(state: dict, result: dict, warnings: list[str]) -> SkillOutput:
-    state.setdefault("artifacts", []).append({"id": "did_effect", "type": "did_effect", "content": result, "warnings": warnings, "generated_by": "DIDSkill"})
     return SkillOutput("did_effect", "did_effect", result, valid=True, warnings=warnings)
-

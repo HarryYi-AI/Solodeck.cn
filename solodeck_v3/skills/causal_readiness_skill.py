@@ -48,6 +48,8 @@ class CausalReadinessSkill(BaseSkill):
         readiness = {
             "treatment": treatment,
             "outcome": outcome,
+            "unit": spec.get("unit"),
+            "time": spec.get("time"),
             "candidate_confounders": confounders,
             "score": score,
             "overlap_ok": overlap,

@@ -3,6 +3,7 @@
 v4 extends v3 without breaking v3 APIs. New capabilities:
 
 - **Multi-turn**: `session/store.py` persists turns, entities, artifact cache
+- **Data-Agent Retrieval**: `retrieval/` — schema / KG / artifact / session / text evidence router
 - **Tool calling**: `tools/registry.py` — 7 structured tools
 - **Orchestration**: `planning/task_planner.py` + `runtime/runner.py`
 - **Context compression**: `context/compressor.py`
