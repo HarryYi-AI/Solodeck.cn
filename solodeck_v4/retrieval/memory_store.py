@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,30 +41,31 @@ class MemoryStore:
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or MEMORY_DIR
+        self.use_seed_files = root is not None or os.getenv("SOLODECK_USE_DEMO_MEMORY", "").lower() in {"1", "true", "yes"}
         self.root.mkdir(parents=True, exist_ok=True)
 
     def schema_summary(self) -> dict[str, Any]:
-        data = _read_json(self.root / "schema_summary.json", {})
+        data = _read_json(self.root / "schema_summary.json", {}) if self.use_seed_files else {}
         if data:
             return data
         return _bootstrap_schema_from_v3()
 
     def kg_edges(self) -> list[dict[str, Any]]:
-        edges = _read_json(self.root / "kg_edges.json", [])
+        edges = _read_json(self.root / "kg_edges.json", []) if self.use_seed_files else []
         if edges:
             return edges if isinstance(edges, list) else edges.get("edges", [])
         return _bootstrap_kg_from_v3()
 
     def artifacts(self) -> list[dict[str, Any]]:
-        data = _read_json(self.root / "artifacts.json", [])
+        data = _read_json(self.root / "artifacts.json", []) if self.use_seed_files else []
         return data if isinstance(data, list) else data.get("artifacts", [])
 
     def session_history(self) -> list[dict[str, Any]]:
-        data = _read_json(self.root / "session_history.json", [])
+        data = _read_json(self.root / "session_history.json", []) if self.use_seed_files else []
         return data if isinstance(data, list) else data.get("sessions", [])
 
     def text_chunks(self) -> list[dict[str, Any]]:
-        return _read_jsonl(self.root / "text_chunks.jsonl")
+        return _read_jsonl(self.root / "text_chunks.jsonl") if self.use_seed_files else []
 
 
 def _bootstrap_schema_from_v3() -> dict[str, Any]:

@@ -43,11 +43,18 @@ def validate_retrieval_evidence(state: dict[str, Any]) -> dict[str, Any]:
         )
         for item in evidence
     )
+    has_calculation_evidence = has_calculation_evidence or any(
+        artifact.get("source_type") in {"python", "sql"}
+        and artifact.get("generated_by") not in {None, "ReportSkill", "WriterAgent", "llm"}
+        for artifact in state.get("artifacts", [])
+    )
     if numeric_claim and not has_calculation_evidence:
         issues.append("数值结论缺少 Python/SQL 计算证据")
         actions.append("require_python_skill_or_mark_unavailable")
         if user:
-            user["limitations"] = (user.get("limitations") or "") + "；数值结论需 Python 技能重算或标记为不可用"
+            warning = "数值结论需 Python 技能重算或标记为不可用"
+            if warning not in (user.get("limitations") or ""):
+                user["limitations"] = ((user.get("limitations") or "") + "；" + warning).strip("；")
             state["user_artifact"] = user
 
     valid = not issues

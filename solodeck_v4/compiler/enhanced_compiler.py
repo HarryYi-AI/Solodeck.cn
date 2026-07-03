@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from collections import Counter
 
 from solodeck_v3.compiler.task_schema import TaskSpec
 from solodeck_v3.compiler.task_compiler import compile_user_goal
@@ -37,10 +38,10 @@ def compile_with_session(
     linked_entities = entity_link.get("linked_entities") or []
     current_linked_entities = current_entity_link.get("linked_entities") or []
     if linked_entities:
-        treatments = [e["column"] for e in current_linked_entities if e.get("column") in TREATMENT_COLUMNS and e.get("column") in columns]
+        treatments = _rank_linked_treatments(current_linked_entities, columns)
         outcomes = [e["column"] for e in current_linked_entities if e.get("column") in OUTCOME_COLUMNS and e.get("column") in columns]
         if not treatments:
-            treatments = [e["column"] for e in linked_entities if e.get("column") in TREATMENT_COLUMNS and e.get("column") in columns]
+            treatments = _rank_linked_treatments(linked_entities, columns)
         if not outcomes:
             outcomes = [e["column"] for e in linked_entities if e.get("column") in OUTCOME_COLUMNS and e.get("column") in columns]
         if treatments:
@@ -81,3 +82,10 @@ def _prioritize(values: list[str], preferred: set[str]) -> list[str]:
     head = [value for value in values if value in preferred]
     tail = [value for value in values if value not in preferred]
     return list(dict.fromkeys(head + tail))
+
+
+def _rank_linked_treatments(entities: list[dict[str, Any]], columns: list[str]) -> list[str]:
+    linked = [item["column"] for item in entities if item.get("column") in TREATMENT_COLUMNS and item.get("column") in columns]
+    counts = Counter(linked)
+    first_seen = {column: linked.index(column) for column in counts}
+    return sorted(counts, key=lambda column: (-counts[column], first_seen[column]))

@@ -9,6 +9,7 @@ from solodeck_v4.evolution import SkillOptLite
 from solodeck_v4.governance import govern_claims, run_governance_suite
 from solodeck_v4.memory import MemoryItem, SQLiteMemoryBackend, UnifiedMemory
 from solodeck_v4.runtime.checkpoint import CheckpointStore
+from solodeck_v4.compiler.enhanced_compiler import compile_with_session
 
 
 class UnifiedMemoryTests(unittest.TestCase):
@@ -59,6 +60,26 @@ class GovernanceTests(unittest.TestCase):
         report = govern_claims(state, "请联系 13800138000 获取结果。")
         self.assertTrue(report["block_output"])
         self.assertNotIn("13800138000", report["answer"])
+
+    def test_decimal_is_not_misclassified_as_phone(self) -> None:
+        state = self._state()
+        state["user_artifact"] = {"estimated_impact": -12.252144923627279}
+        report = run_governance_suite(state)
+        privacy = next(check for check in report["checks"] if check["name"] == "privacy")
+        self.assertTrue(privacy["valid"])
+
+
+class CompilerTests(unittest.TestCase):
+    def test_compared_title_styles_rank_before_platform_context(self) -> None:
+        import pandas as pd
+
+        df = pd.DataFrame({
+            "content_id": ["1", "2"], "platform": ["xiaohongshu"] * 2,
+            "title_style": ["pain_point", "tutorial"], "consultations": [3, 2],
+            "publish_time": ["2026-01-01", "2026-01-02"],
+        })
+        spec = compile_with_session("小红书痛点标题是否比教程标题更能带来咨询？", df)
+        self.assertEqual(spec.candidate_treatments[0], "title_style")
 
 
 class BenchmarkAndEvolutionTests(unittest.TestCase):

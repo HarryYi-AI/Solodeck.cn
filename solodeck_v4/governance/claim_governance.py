@@ -142,7 +142,7 @@ def _action_safety_validator(state: dict[str, Any]) -> dict[str, Any]:
 
 def _privacy_validator(state: dict[str, Any]) -> dict[str, Any]:
     text = _all_text(state)
-    hit = bool(re.search(r"(?:1[3-9]\d{9})|(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})|(?:QC-[A-Za-z0-9-]{16,})", text))
+    hit = bool(re.search(r"(?<![\d.])1[3-9]\d{9}(?!\d)|(?:[\w.+-]+@[\w.-]+\.[A-Za-z]{2,})|(?:QC-[A-Za-z0-9-]{16,})", text))
     return _check("privacy", ["输出可能包含手机号、邮箱或密钥"] if hit else [], blocking=hit)
 
 
