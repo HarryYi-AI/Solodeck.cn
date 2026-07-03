@@ -10,6 +10,7 @@ from solodeck_v4.governance import govern_claims, run_governance_suite
 from solodeck_v4.memory import MemoryItem, SQLiteMemoryBackend, UnifiedMemory
 from solodeck_v4.runtime.checkpoint import CheckpointStore
 from solodeck_v4.compiler.enhanced_compiler import compile_with_session
+from solodeck_v4.tools.registry import call_tool
 
 
 class UnifiedMemoryTests(unittest.TestCase):
@@ -80,6 +81,21 @@ class CompilerTests(unittest.TestCase):
         })
         spec = compile_with_session("小红书痛点标题是否比教程标题更能带来咨询？", df)
         self.assertEqual(spec.candidate_treatments[0], "title_style")
+
+
+class ToolValidationTests(unittest.TestCase):
+    def test_unstable_interval_is_downgraded_before_validation(self) -> None:
+        state = {
+            "artifacts": [{"id": "bootstrap_ci", "content": {"ci_95": [-1.0, 2.0]}}],
+            "trace": [
+                {"step": "LoadSession"}, {"step": "RiskRoute"},
+                {"step": "ExecuteSkills"}, {"step": "ToolCall"},
+            ],
+            "final_report": {}, "user_artifact": {},
+        }
+        result = call_tool("validate_artifacts", state, {})
+        self.assertTrue(state["critique"]["downgraded_to_validation"])
+        self.assertNotIn("区间不稳定但没有降级为验证建议", state["validation_report"]["issues"])
 
 
 class BenchmarkAndEvolutionTests(unittest.TestCase):

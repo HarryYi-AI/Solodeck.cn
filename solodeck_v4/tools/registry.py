@@ -129,6 +129,11 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
 def _tool_validate(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     from solodeck_v3.verification import validate_all
 
+    bootstrap = next((artifact.get("content", {}) for artifact in state.get("artifacts", []) if artifact.get("id") == "bootstrap_ci"), {})
+    interval = bootstrap.get("ci_95") or []
+    if len(interval) == 2 and interval[0] is not None and interval[1] is not None and float(interval[0]) <= 0 <= float(interval[1]):
+        state.setdefault("critique", {})["unstable_ci"] = True
+        state["critique"]["downgraded_to_validation"] = True
     state["validation_report"] = validate_all(state)
     return {"ok": True, "valid": state["validation_report"].get("valid"), "cost": 0.01}
 
