@@ -22,6 +22,11 @@ def build_developer_trace_panel(state: dict) -> dict:
         "post_writer_gate": state.get("post_writer_validation", {}),
         "skill_manifests": state.get("skill_manifests", {}),
         "skill_patches": state.get("skill_patches", []),
+        "semantic_route": state.get("semantic_route", {}),
+        "critic_report": state.get("critic_report", {}),
+        "plan_policy_decision": state.get("plan_policy_decision", {}),
+        "tool_audit": state.get("tool_audit", []),
+        "claim_ledger": [_safe_claim_row(item) for item in state.get("claims", [])],
         "claim_review": state.get("claim_review", {}),
         "validation_summary": state.get("validation_summary", {}),
         "trace": state.get("trace", []),
@@ -33,6 +38,20 @@ def build_developer_trace_panel(state: dict) -> dict:
             "warnings": pack.get("warnings", []) + (state.get("retrieval_validation") or {}).get("warnings", []),
             "validation": state.get("retrieval_validation", {}),
         },
+    }
+
+
+def _safe_claim_row(item: dict) -> dict:
+    return {
+        "claim_id": item.get("claim_id"),
+        "claim_type": item.get("claim_type"),
+        "evidence_level": item.get("evidence_level"),
+        "source_artifact_ids": item.get("source_artifact_ids", []),
+        "calculation_method": item.get("calculation_method"),
+        "confidence": item.get("confidence"),
+        "limitations": item.get("limitations"),
+        "applicable_scope": item.get("applicable_scope"),
+        "status": item.get("status"),
     }
 
 

@@ -13,6 +13,8 @@ starlette>=0.40,<0.49
 uvicorn>=0.29
 python-multipart>=0.0.9
 langgraph>=0.2
+langfuse>=3.63,<5
+protobuf>=6.31,<7
 
 # Optional heavy causal-discovery backends. SoloDeck has deterministic fallbacks
 # when these are not installed.

@@ -268,10 +268,10 @@ def _action_cards(state: DataAgentState) -> list[dict[str, Any]]:
     outcome = _display_name(query.get("outcome", "结果指标"))
     impact = bootstrap.get("adjusted_effect", bootstrap.get("ate", 0))
     if low > 0:
-        title = f"继续放大：{value}"
+        title = f"小范围延续验证：{value}"
         confidence = "方向较稳"
-        explanation = f"观察到 {value} 对 {outcome} 的提升区间大多高于 0，可小幅增加投入。"
-        next_step = f"在同一平台、同一主题下继续使用 {value}，并记录 24 小时、72 小时和 7 天后的 {outcome}。"
+        explanation = f"观察到 {value} 对 {outcome} 的提升区间高于 0，但仍需用下一批数据复核。"
+        next_step = f"在同一平台、同一主题下小范围继续使用 {value}，并记录 24 小时、72 小时和 7 天后的 {outcome}。"
     elif high < 0:
         title = f"减少投入：{value}"
         confidence = "负向较稳"

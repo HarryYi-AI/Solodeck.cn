@@ -16,6 +16,10 @@ def compile_user_goal(user_goal: str, structured_data: pd.DataFrame, unstructure
     columns = list(structured_data.columns)
     goal = (user_goal or "").lower()
     outcome_priority = [
+        ("conversion_rate", ["转化率", "成交率", "购买率", "conversion rate"]),
+        ("consultation_rate", ["咨询率", "线索率", "consultation rate"]),
+        ("favorite_rate", ["收藏率", "保存率", "favorite rate"]),
+        ("follow_rate", ["转粉率", "涨粉率", "follow rate"]),
         ("consultations", ["咨询", "线索", "私信", "lead"]),
         ("conversions", ["成交", "转化", "购买", "订单"]),
         ("revenue", ["收入", "收益", "营收", "gmv", "money"]),
@@ -30,7 +34,7 @@ def compile_user_goal(user_goal: str, structured_data: pd.DataFrame, unstructure
         ("feature_tags", ["功能", "产品功能", "feature"]),
         ("production_hours", ["制作时间", "制作时长", "成本"]),
     ]
-    outcomes = _rank_columns(columns, goal, outcome_priority, ["revenue", "conversions", "consultations", "favorites", "views"])
+    outcomes = _rank_columns(columns, goal, outcome_priority, ["conversion_rate", "consultation_rate", "favorite_rate", "follow_rate", "revenue", "conversions", "consultations", "favorites", "views"])
     treatments = _rank_columns(columns, goal, treatment_priority, ["platform", "topic", "title_style", "publish_time", "production_hours", "feature_tags"])
     if any(w in goal for w in ["想法", "假设生成", "头脑风暴", "ideation"]):
         task_type = "ideation"

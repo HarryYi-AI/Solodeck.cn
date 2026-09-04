@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
-
-ToolFn = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+from .contracts import ToolContract, dispatch_tool
 
 
 def _tool_retrieve_memory(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -41,6 +40,7 @@ def _apply_retrieval_hints(state: dict[str, Any], pack: dict[str, Any]) -> None:
 
 def _tool_compile_task(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     from solodeck_v4.compiler.enhanced_compiler import compile_with_session
+    from solodeck_v4.routing import apply_route_to_spec, route_task_intent
     from solodeck_v3.nlp.entity_linker import link_entities
 
     columns = list(state["df"].columns) if state.get("df") is not None and not getattr(state["df"], "empty", True) else []
@@ -57,7 +57,17 @@ def _tool_compile_task(state: dict[str, Any], args: dict[str, Any]) -> dict[str,
         state.get("compressed_context"),
         state.get("linked_entities"),
     )
+    semantic_route = route_task_intent(
+        state["message"],
+        columns,
+        baseline_task_type=spec.task_type,
+    )
+    spec = apply_route_to_spec(spec, semantic_route, columns)
+    state["semantic_route"] = semantic_route.to_dict()
     state["task_spec"] = spec.to_dict()
+    from solodeck_runtime.bridge import prepare_runtime_protocol
+
+    prepare_runtime_protocol(state)
     from solodeck_v4.retrieval.retrieval_router import retrieve_memory
     from solodeck_v4.session.store import get_session
 
@@ -72,7 +82,18 @@ def _tool_compile_task(state: dict[str, Any], args: dict[str, Any]) -> dict[str,
     state["evidence_pack"] = pack
     state["retrieved_memory"] = pack
     _apply_retrieval_hints(state, pack)
-    return {"ok": True, "task_spec": state["task_spec"], "entity_link": state["entity_link"], "evidence_pack": pack, "cost": 0.02}
+    return {
+        "ok": True,
+        "task_spec": state["task_spec"],
+        "task_spec_v2": state["task_spec_v2"],
+        "data_grounding": state["data_grounding"],
+        "analysis_workflow": state["analysis_workflow"],
+        "workflow_validation": state["workflow_validation"],
+        "entity_link": state["entity_link"],
+        "semantic_route": state["semantic_route"],
+        "evidence_pack": pack,
+        "cost": 0.02 if semantic_route.layer != "L3" else 0.08,
+    }
 
 
 def _tool_plan_steps(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -91,6 +112,7 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
     from solodeck_v3.graph.kg_builder import build_kg_context
     from solodeck_v3.skills.schema_skill import SchemaSkill
     from solodeck_v3.skills.data_quality_skill import DataQualitySkill
+    from solodeck_v4.evolution import AdaptivePlanPolicy
 
     spec = state.get("task_spec") or {}
     state["task"] = spec.get("objective") or state.get("message", "")
@@ -119,15 +141,27 @@ def _tool_execute_analysis(state: dict[str, Any], args: dict[str, Any]) -> dict[
         state.get("critique"),
         state.get("kg_context", {}),
     )
-    plan = plans[0] if plans else {"skills": ["SchemaSkill", "ReportSkill"], "estimated_cost": 0.08}
+    candidate_plans = plans
+    previous_plan_id = (state.get("selected_plan") or {}).get("plan_id")
+    if state.get("critique", {}).get("needs_repair") and previous_plan_id and len(plans) > 1:
+        alternatives = [item for item in plans if item.get("plan_id") != previous_plan_id]
+        if alternatives:
+            candidate_plans = alternatives
+    plan, policy_decision = AdaptivePlanPolicy().select_plan(
+        candidate_plans,
+        task_type=spec.get("task_type", "descriptive_analysis"),
+        project_id=state.get("project_id", "solodeck"),
+    )
     state["selected_plan"] = plan
+    state["plan_policy_decision"] = policy_decision
     execute_skill_sequence(state, plan.get("skills", []))
     cost = float(plan.get("estimated_cost", 0.1))
-    return {"ok": True, "skills": plan.get("skills", []), "cost": cost}
+    return {"ok": True, "skills": plan.get("skills", []), "plan_policy": policy_decision, "cost": cost}
 
 
 def _tool_validate(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
     from solodeck_v3.verification import validate_all
+    from solodeck_v4.critics import evaluate_run
 
     bootstrap = next((artifact.get("content", {}) for artifact in state.get("artifacts", []) if artifact.get("id") == "bootstrap_ci"), {})
     interval = bootstrap.get("ci_95") or []
@@ -135,7 +169,38 @@ def _tool_validate(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any
         state.setdefault("critique", {})["unstable_ci"] = True
         state["critique"]["downgraded_to_validation"] = True
     state["validation_report"] = validate_all(state)
-    return {"ok": True, "valid": state["validation_report"].get("valid"), "cost": 0.01}
+    from solodeck_runtime.verifier import ActiveVerifier
+
+    active_checks = []
+    frame = state.get("df")
+    if frame is not None and not getattr(frame, "empty", True):
+        rate_specs = {
+            "conversion_rate": ("conversions", next((name for name in ("visitors", "clicks", "consultations", "views") if name in frame.columns), "")),
+            "consultation_rate": ("consultations", next((name for name in ("views", "impressions", "visitors") if name in frame.columns), "")),
+        }
+        outcome = ((state.get("task_spec") or {}).get("candidate_outcomes") or [None])[0]
+        numerator, denominator = rate_specs.get(outcome, ("", ""))
+        if numerator and denominator and numerator in frame.columns:
+            reported = frame[outcome] if outcome in frame.columns else None
+            active_checks.append(ActiveVerifier().inspect_rate(frame, numerator, denominator, reported))
+    estimate_artifacts = [item for item in state.get("artifacts", []) if item.get("id") in {"bootstrap_ci", "regression_effect", "did_effect"}]
+    if len(estimate_artifacts) > 1:
+        active_checks.append(ActiveVerifier().compare_artifacts(
+            estimate_artifacts, ("effect_estimate", "ate", "adjusted_effect", "did_effect")
+        ))
+    active_issues = [issue for check in active_checks for issue in check.get("issues", [])]
+    state["active_verification"] = {"valid": not active_issues, "checks": active_checks, "issues": active_issues}
+    if active_issues:
+        state["validation_report"]["valid"] = False
+        state["validation_report"].setdefault("issues", []).extend(active_issues)
+    state["critic_report"] = evaluate_run(state, phase="prewrite").to_dict()
+    return {
+        "ok": True,
+        "valid": state["validation_report"].get("valid") and state["critic_report"]["decision"] != "block",
+        "critic_score": state["critic_report"]["overall_score"],
+        "critic_decision": state["critic_report"]["decision"],
+        "cost": 0.01,
+    }
 
 
 def _tool_compose_response(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -156,13 +221,72 @@ def _tool_compose_response(state: dict[str, Any], args: dict[str, Any]) -> dict[
         })
     if not state.get("action_cards") and any(a.get("id") == "bootstrap_ci" for a in state.get("artifacts", [])):
         state["action_cards"] = _action_cards(state)
+    if not state.get("action_cards"):
+        comparison = next((a.get("content", {}) for a in state.get("artifacts", []) if a.get("id") == "descriptive_comparison"), {})
+        if comparison.get("question_type") == "descriptive_comparison":
+            state["action_cards"] = _descriptive_action_cards(comparison)
     state["user_artifact"] = build_user_artifact_view(state)
     state["user_artifact"] = WriterAgent().polish_user_artifact(state["user_artifact"])
+    from solodeck_v4.evidence import build_claim_records
+    state["claims"] = build_claim_records(state)
     from solodeck_v4.retrieval.evidence_validator import validate_retrieval_evidence
 
     state["retrieval_validation"] = validate_retrieval_evidence(state)
     state["developer_trace"] = build_developer_trace_panel(state)
     return {"ok": True, "cost": 0.04}
+
+
+def _descriptive_action_cards(comparison: dict[str, Any]) -> list[dict[str, Any]]:
+    if comparison.get("status") == "insufficient_comparison":
+        raw_denominator = comparison.get("denominator") or "访客数或咨询数"
+        denominator = {
+            "visitors": "访客数",
+            "clicks": "点击数",
+            "sessions": "访问次数",
+            "consultations": "咨询数",
+            "views": "播放量",
+            "impressions": "曝光量",
+        }.get(raw_denominator, raw_denominator)
+        return [
+            {
+                "title": "先补齐同口径分母",
+                "action": f"为每个平台补充{denominator}和成交数；缺失值保持为空，不要填成 0。",
+                "priority": "补数据",
+                "evidence": "当前只有部分平台可以计算转化率，无法公平排名。",
+            }
+        ]
+    if comparison.get("status") == "tie":
+        return [
+            {
+                "title": "先核对全零与缺失值",
+                "action": "确认各平台统计周期一致，并补齐访客、咨询和成交数据后重新比较。",
+                "priority": "核对",
+                "evidence": "当前各平台数值完全相同，无法区分优先级。",
+            }
+        ]
+    best = comparison["best"]
+    worst = comparison["worst"]
+    metric = comparison.get("metric_label", "目标指标")
+    return [
+        {
+            "title": f"保持 {best['group']} 的有效做法",
+            "action": f"先维持当前投入，并继续记录{metric}；新增预算采用小步增加，避免仅凭一次排序全面转移。",
+            "priority": "继续",
+            "evidence": f"当前上传数据中，{best['group']} 的 {metric} 排名第一。",
+        },
+        {
+            "title": f"排查 {worst['group']} 的转化漏斗",
+            "action": "补充曝光、点击、下单和支付数据，定位损失发生在哪一步。",
+            "priority": "排查",
+            "evidence": f"当前上传数据中，{worst['group']} 的 {metric} 排名末位。",
+        },
+        {
+            "title": "验证平台差异的来源",
+            "action": "选择相近商品、活动力度和观察周期做一次小范围配对测试，再决定是否调整预算。",
+            "priority": "验证",
+            "evidence": "当前结论是直接数值比较，尚未拆分平台、活动和流量结构的影响。",
+        },
+    ]
 
 
 def _tool_clarify(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
@@ -174,25 +298,23 @@ def _tool_clarify(state: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]
     return {"ok": True, "clarification": msg, "cost": 0.0}
 
 
-TOOL_REGISTRY: dict[str, dict[str, Any]] = {
-    "retrieve_memory": {"fn": _tool_retrieve_memory, "description": "Retrieve schema/KG/artifact/session/text evidence for the query", "cost_hint": 0.02},
-    "compile_task": {"fn": _tool_compile_task, "description": "Compile user message to TaskSpec with entity linking", "cost_hint": 0.02},
-    "plan_steps": {"fn": _tool_plan_steps, "description": "Decompose task into orchestrated steps", "cost_hint": 0.02},
-    "execute_analysis": {"fn": _tool_execute_analysis, "description": "Run Python Skills pipeline", "cost_hint": 0.1},
-    "validate_artifacts": {"fn": _tool_validate, "description": "Run verification validators", "cost_hint": 0.01},
-    "compose_response": {"fn": _tool_compose_response, "description": "Generate user artifact and action cards", "cost_hint": 0.04},
-    "clarify": {"fn": _tool_clarify, "description": "Ask user for clarification on ambiguous entities", "cost_hint": 0.0},
+TOOL_REGISTRY: dict[str, ToolContract] = {
+    "retrieve_memory": ToolContract("retrieve_memory", _tool_retrieve_memory, "Retrieve schema/KG/artifact/session/text evidence", "memory:read", 5.0, 0.02, required_state=("message",)),
+    "compile_task": ToolContract("compile_task", _tool_compile_task, "Compile a user goal into a schema-valid TaskSpec", "schema:read", 20.0, 0.02, required_state=("message", "df")),
+    "plan_steps": ToolContract("plan_steps", _tool_plan_steps, "Decompose TaskSpec into executable steps", "plan:write", 3.0, 0.02, required_state=("task_spec",)),
+    "execute_analysis": ToolContract("execute_analysis", _tool_execute_analysis, "Execute deterministic Python Skills", "analysis:execute", 45.0, 0.1, required_state=("task_spec", "df"), side_effects=("artifacts", "skill_manifests")),
+    "validate_artifacts": ToolContract("validate_artifacts", _tool_validate, "Validate statistical, causal, privacy and trace claims", "artifact:validate", 10.0, 0.01, required_state=("artifacts",), side_effects=("validation_report", "critic_report")),
+    "compose_response": ToolContract("compose_response", _tool_compose_response, "Compose claims and action cards from validated artifacts", "response:write", 20.0, 0.04, required_state=("artifacts",), side_effects=("user_artifact",)),
+    "clarify": ToolContract("clarify", _tool_clarify, "Ask one bounded clarification question", "response:write", 3.0, 0.0, side_effects=("clarification",)),
 }
 
 
 def list_tools() -> list[dict[str, Any]]:
-    return [{"name": k, **{kk: vv for kk, vv in v.items() if kk != "fn"}} for k, v in TOOL_REGISTRY.items()]
+    return [contract.public_schema() for contract in TOOL_REGISTRY.values()]
 
 
 def call_tool(name: str, state: dict[str, Any], args: dict[str, Any] | None = None) -> dict[str, Any]:
-    entry = TOOL_REGISTRY.get(name)
-    if entry is None:
+    contract = TOOL_REGISTRY.get(name)
+    if contract is None:
         return {"ok": False, "error": f"unknown tool: {name}", "cost": 0.0}
-    result = entry["fn"](state, args or {})
-    result.setdefault("tool", name)
-    return result
+    return dispatch_tool(contract, state, args or {})

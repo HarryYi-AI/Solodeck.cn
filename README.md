@@ -1,10 +1,10 @@
 # SoloDeck
 
-SoloDeck is an AI operating advisor for creators, solo businesses, and small product teams. It turns content, revenue, feedback, campaign, and experiment data into causal-aware next actions.
+**SoloDeck is a stateful and verifiable Data Agent that grounds natural-language analytical goals to heterogeneous data, compiles executable workflows, actively verifies intermediate results, and preserves analytical state across long-running interactions.**
 
-中文简介：SoloDeck 是面向内容创作者、一人公司和小型产品团队的 AI 经营分析 Agent，把内容、收入、反馈、商务合作和实验数据转化为可验证的下一步经营动作。
+中文：SoloDeck 是一个有状态、可验证的数据分析智能体运行时。它把自然语言目标映射到表、字段、实体和历史分析产物，执行真实的 Python/统计技能，并用证据血缘约束最终结论。
 
-Current architecture: a stateful and auditable Data Agent Runtime with unified evidence memory, causal claim governance, replayable checkpoints and validation-gated skill evolution. See [Industrial Data Agent Runtime](docs/INDUSTRIAL_DATA_AGENT_RUNTIME.md).
+内容经营、收入和实验分析是当前产品场景；因果分析是高级 Skill Pack，而不是系统的全部身份。完整重构说明见 [Stateful and Verifiable Runtime](docs/STATEFUL_VERIFIABLE_RUNTIME.md)。
 
 <img width="1495" height="798" alt="image" src="https://github.com/user-attachments/assets/1092a0cb-7e6a-4f41-a9a3-9560e0cc4729" />
 <img width="1419" height="931" alt="image" src="https://github.com/user-attachments/assets/1a0ecda6-09fa-4442-aecd-d6e5a1fd15f1" />
@@ -23,9 +23,9 @@ SoloDeck focuses on:
 
 Creators and solo businesses often have useful data scattered across platform dashboards, spreadsheets, payment screenshots, feedback notes, and campaign records. SoloDeck helps them move from fragmented data to concrete operating decisions.
 
-## SoloDeck v3: Verifiable Data Agent Runtime
+## Verifiable Data Analysis Agent Runtime
 
-SoloDeck v3 upgrades the product from a dashboard-style prototype into a verifiable data-agent runtime:
+SoloDeck has evolved from a dashboard-style prototype into a verifiable data analysis Agent runtime:
 
 ```text
 User data
@@ -42,7 +42,7 @@ User data
 
 The default user interface remains simple: upload data, see diagnosis, check whether a decision is reliable, and read three next actions. The technical layer is available in the developer trace panel for review, but it is not exposed as raw JSON to users.
 
-Research ideas used in v3:
+Research ideas used in the runtime:
 
 - DataMind / Scaling Generalist Data-Analytic Agents: task taxonomy, easy-to-hard data-agent workflows, stable code-based multi-turn rollout.
 - JanusCoder: visual-programmatic traceability, so visual output remains tied to executable logic.

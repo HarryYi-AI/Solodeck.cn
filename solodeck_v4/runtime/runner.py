@@ -13,6 +13,7 @@ from solodeck_v3.nlp.entity_linker import link_entities
 from solodeck_v3.reward.process_reward import assign_process_rewards
 from solodeck_v3.runtime.trace_logger import append_trace
 from solodeck_v4.workflows.industrial_runtime import checkpoint, finalize_industrial_runtime, initialize_industrial_state
+from solodeck_v4.observability import agent_observation, record_agent_scores, update_observation
 
 
 def run_v4_agent(
@@ -21,6 +22,36 @@ def run_v4_agent(
     session_id: str,
     text: str = "",
 ) -> dict[str, Any]:
+    trace_id = f"v4_{uuid.uuid4().hex[:12]}"
+    with agent_observation(message, session_id, trace_id, df) as observation:
+        result = _run_v4_agent(message, df, session_id, text=text, trace_id=trace_id)
+        update_observation(
+            observation,
+            output={
+                "status": "completed",
+                "reply_length": len(result.get("reply") or ""),
+                "evidence_level": result.get("evidence_level"),
+            },
+            metadata={
+                "task_type": (result.get("task_spec") or {}).get("task_type"),
+                "route_layer": (result.get("semantic_route") or {}).get("layer"),
+                "critic_decision": (result.get("critic_report") or {}).get("decision"),
+                "tool_count": len(result.get("tool_audit") or []),
+                "cost_spent": result.get("cost_spent"),
+            },
+        )
+        record_agent_scores(observation, result)
+        return result
+
+
+def _run_v4_agent(
+    message: str,
+    df: Any,
+    session_id: str,
+    *,
+    text: str,
+    trace_id: str,
+) -> dict[str, Any]:
     session = get_session(session_id)
     if session is None:
         raise KeyError(f"session not found: {session_id}")
@@ -28,16 +59,36 @@ def run_v4_agent(
     append_turn(session_id, "user", message)
     session = get_session(session_id) or session
 
+    state_command = execute_state_command(message, session)
+    if state_command is not None:
+        append_turn(session_id, "assistant", state_command["reply"], {
+            "operation": "analytical_state_restore",
+            "state_id": state_command["state_id"],
+        })
+        update_session(
+            session_id,
+            last_state_id=state_command["state_id"],
+            state_history=(session.get("state_history") or []) + [{
+                "state_id": state_command["state_id"],
+                "task_id": (state_command.get("analytical_state") or {}).get("task_id"),
+                "trace_id": trace_id,
+                "summary": state_command["reply"][:120],
+            }],
+        )
+        return {"session_id": session_id, "trace_id": trace_id, **state_command, "version": "4.0.0"}
+
     state: dict[str, Any] = {
         "message": message,
         "df": df,
         "text": text,
         "session_id": session_id,
-        "trace_id": f"v4_{uuid.uuid4().hex[:12]}",
+        "trace_id": trace_id,
         "trace": [],
         "artifacts": [],
         "tool_calls": [],
         "cost_spent": 0.0,
+        "project_id": session.get("project_id", "solodeck"),
+        "parent_state_id": session.get("last_state_id"),
     }
     initialize_industrial_state(state)
     checkpoint(state, "input")
@@ -121,6 +172,31 @@ def run_v4_agent(
     state["retrieval_validation"] = retrieval_val
     append_trace(state, "RetrievalValidate", "VerifierAgent", retrieval_val)
 
+    from solodeck_v4.critics import evaluate_run
+
+    state["critic_report"] = evaluate_run(state, phase="postwrite").to_dict()
+    while (
+        state["critic_report"].get("decision") == "repair"
+        and int(state.get("revision_number", 0)) < min(2, int(state.get("max_revisions", 2)))
+    ):
+        state["revision_number"] = int(state.get("revision_number", 0)) + 1
+        state.setdefault("critique", {})["needs_repair"] = True
+        state["critique"]["repair_directives"] = state["critic_report"].get("repair_directives", [])
+        append_trace(state, "ReflectRepair", "VerifierAgent", {
+            "revision": state["revision_number"],
+            "critic_score": state["critic_report"].get("overall_score"),
+            "directives": state["critique"]["repair_directives"],
+        })
+        for tool_name in ("execute_analysis", "validate_artifacts", "compose_response"):
+            result = call_tool(tool_name, state, {"repair": True})
+            state["cost_spent"] += float(result.get("cost", 0))
+            state["tool_calls"].append(result)
+            append_trace(state, "ToolCall", "ExecutorAgent", {"tool": tool_name, "repair": True, "ok": result.get("ok")})
+        state["post_writer_validation"] = validate_post_writer(state)
+        state["critic_report"] = evaluate_run(state, phase="postwrite").to_dict()
+        if state["critic_report"].get("decision") == "block":
+            break
+
     rewards = assign_process_rewards(state["trace"], state.get("validation_report") or {"issues": post.get("issues", []), "checks": []})
     state["step_rewards"] = rewards
 
@@ -135,6 +211,9 @@ def run_v4_agent(
 def _format_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
     if state.get("clarification"):
         return state["clarification"]
+    descriptive_reply = _format_descriptive_reply(artifact, state)
+    if descriptive_reply:
+        return descriptive_reply
     llm_reply = _try_llm_reply(artifact, state)
     if llm_reply:
         return llm_reply
@@ -149,11 +228,57 @@ def _format_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
         action = first.get("title") or first.get("action") or ""
         if action:
             parts.append(f"建议：{action}")
-    if state.get("risk_profile", {}).get("high_risk"):
-        parts.append("（高风险因果问题已走深度校验路径）")
-    if state.get("reuse_cache"):
-        parts.append("（复用上轮分析结果以降低成本）")
     return "\n".join(parts)
+
+
+def execute_state_command(message: str, session: dict[str, Any], store: Any | None = None) -> dict[str, Any] | None:
+    """Execute explicit state operations from persisted snapshots, never chat replay."""
+    normalized = (message or "").lower()
+    restore_requested = any(term in normalized for term in ("回到", "恢复", "rollback", "退回"))
+    compare_requested = any(term in normalized for term in ("比较", "对比", "diff"))
+    if not restore_requested and not (compare_requested and "之前" in normalized):
+        return None
+
+    from solodeck_runtime.persistence import StateStore
+
+    store = store or StateStore()
+    history = [item.get("state_id") for item in session.get("state_history") or [] if item.get("state_id")]
+    current_id = session.get("last_state_id") or (history[-1] if history else None)
+    explicit = next((token.strip("，。,.()[]") for token in message.split() if token.startswith("state_")), None)
+    target_id = explicit or (history[-2] if len(history) >= 2 else None)
+    if not current_id or not target_id:
+        return {
+            "reply": "还没有可恢复的历史分析状态。请先完成至少两轮分析。",
+            "state_id": current_id,
+            "analytical_state": None,
+            "state_diff": {},
+        }
+
+    differences = store.diff(target_id, current_id)
+    restored = store.rollback(current_id, target_id) if restore_requested else store.restore(current_id)
+    changed = "、".join(list(differences)[:5]) or "没有实质变化"
+    action = "已恢复到指定分析状态" if restore_requested else "已比较两个分析状态"
+    return {
+        "reply": f"{action}。变化项：{changed}。后续分析将从该状态继续。",
+        "state_id": restored.state_id,
+        "analytical_state": restored.to_dict(),
+        "state_diff": differences,
+    }
+
+
+def _format_descriptive_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
+    comparison = next((a.get("content", {}) for a in state.get("artifacts", []) if a.get("id") == "descriptive_comparison"), {})
+    if not comparison.get("ranking"):
+        return ""
+    result = artifact.get("result") or ""
+    cards = artifact.get("action_cards") or state.get("action_cards") or []
+    lines = [result]
+    if cards:
+        lines.append(f"下一步：{cards[0].get('action', cards[0].get('title', ''))}")
+        if len(cards) > 1:
+            lines.append(f"同时：{cards[1].get('action', cards[1].get('title', ''))}")
+    lines.append(artifact.get("limitations") or "")
+    return "\n".join(line for line in lines if line)
 
 
 def _missing_estimand_fields(task_spec: dict[str, Any]) -> list[str]:
@@ -163,7 +288,6 @@ def _missing_estimand_fields(task_spec: dict[str, Any]) -> list[str]:
     if not task_spec.get("candidate_treatments"): missing.append("要比较的策略")
     if not task_spec.get("candidate_outcomes"): missing.append("要观察的指标")
     if not task_spec.get("unit"): missing.append("分析单位")
-    if not task_spec.get("time"): missing.append("观察时间")
     return missing
 
 
@@ -191,10 +315,12 @@ def _try_llm_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
    - 为什么这样判断
    - 下一步建议
    - 如果证据不够，再补一句需要补什么
-4. 如果当前结果接近 0 或证据很弱，不要硬下结论，要明确说“现有数据还不足以判断”，并告诉用户补什么。
-5. 不要出现“高风险因果路径”“工具链”“校验器”“artifact”“API”等内部词。
-6. 如果有 action cards，把它们转成自然语言建议，不要原样复制键名。
-7. 回复控制在 120 个中文字以内。
+4. 回答前先使用 Python Skills 已生成的结构化计算工件。只要能比较指标大小，就必须先给出排序、差值或倍数，不能用因果限制代替描述性回答。
+5. 明确区分三层：数值足够时给【描述性结论】；可能原因写成【待验证解释】；只有用户询问导致、归因或增量时才讨论【因果验证】。
+6. 证据弱只限制归因强度，不得抹掉已经算出的描述性事实。
+7. 不要出现“高风险因果路径”“工具链”“校验器”“artifact”“API”等内部词。
+8. 如果有 action cards，把它们转成自然语言建议，不要原样复制键名。
+9. 回复控制在 180 个中文字以内。
 """
 
         payload = {
@@ -206,6 +332,7 @@ def _try_llm_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
             "linked_entities": linked_entities,
             "unresolved_entities": unresolved,
             "result": artifact.get("result", ""),
+            "descriptive_comparison": next((a.get("content", {}) for a in state.get("artifacts", []) if a.get("id") == "descriptive_comparison"), {}),
             "confidence": artifact.get("confidence", ""),
             "limitations": artifact.get("limitations", ""),
             "action_cards": cards[:2],
@@ -221,6 +348,9 @@ def _try_llm_reply(artifact: dict[str, Any], state: dict[str, Any]) -> str:
 
 
 def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str, Any], reply: str) -> None:
+    from solodeck_runtime.bridge import finalize_runtime_protocol
+
+    finalize_runtime_protocol(state, reply)
     append_turn(session_id, "assistant", reply, {
         "trace_id": state.get("trace_id"),
         "cost": state.get("cost_spent"),
@@ -246,6 +376,13 @@ def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str,
         compressed_summary=summary,
         cost_spent=float(session.get("cost_spent", 0)) + float(state.get("cost_spent", 0)),
         plan_history=(session.get("plan_history") or []) + [{"trace_id": state.get("trace_id"), "steps": state.get("plan_steps", [])}],
+        last_state_id=state.get("state_id"),
+        state_history=(session.get("state_history") or []) + [{
+            "state_id": state.get("state_id"),
+            "task_id": state.get("task_id"),
+            "trace_id": state.get("trace_id"),
+            "summary": reply[:120],
+        }],
     )
 
 
@@ -258,6 +395,12 @@ def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
         "user_artifact": state.get("user_artifact"),
         "developer_trace": state.get("developer_trace"),
         "task_spec": state.get("task_spec"),
+        "task_spec_v2": state.get("task_spec_v2"),
+        "data_grounding": state.get("data_grounding"),
+        "analysis_workflow": state.get("analysis_workflow"),
+        "workflow_validation": state.get("workflow_validation"),
+        "analytical_state": state.get("analytical_state"),
+        "state_id": state.get("state_id"),
         "plan_steps": state.get("plan_steps"),
         "tool_calls": state.get("tool_calls"),
         "risk_profile": state.get("risk_profile"),
@@ -271,6 +414,12 @@ def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
         "evidence_pack": state.get("evidence_pack"),
         "retrieval_validation": state.get("retrieval_validation"),
         "governance_report": state.get("governance_report"),
+        "critic_report": state.get("critic_report"),
+        "semantic_route": state.get("semantic_route"),
+        "plan_policy_decision": state.get("plan_policy_decision"),
+        "plan_utility_update": state.get("plan_utility_update"),
+        "claims": state.get("claims"),
+        "tool_audit": state.get("tool_audit"),
         "evidence_level": state.get("evidence_level"),
         "failure_report": state.get("failure_report"),
         "memory_updates": state.get("memory_updates"),

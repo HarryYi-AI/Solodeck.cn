@@ -20,11 +20,14 @@ LEVEL_LABELS = {
 
 
 def run_governance_suite(state: dict[str, Any]) -> dict[str, Any]:
+    from solodeck_v4.evidence import validate_claim_records
+
     checks = [
         _schema_validator(state), _estimand_validator(state), _causal_readiness_validator(state),
         _estimator_validity_validator(state), _uncertainty_validator(state),
         _graph_plausibility_validator(state), _claim_validator(state),
-        _action_safety_validator(state), _privacy_validator(state), _trace_completeness_validator(state),
+        _action_safety_validator(state), validate_claim_records(state),
+        _privacy_validator(state), _trace_completeness_validator(state),
     ]
     issues = [issue for check in checks for issue in check["issues"]]
     warnings = [warning for check in checks for warning in check["warnings"]]
@@ -45,10 +48,11 @@ def govern_claims(state: dict[str, Any], draft: str) -> dict[str, Any]:
     if report["evidence_level"] < EvidenceLevel.QUASI_CAUSAL and re.search(strong, revised):
         revised = re.sub(strong, "观察到与之相关", revised)
         report["warnings"].append("强因果措辞已自动降级")
+    is_descriptive_answer = "【描述性结论】" in revised
     suffix = f"\n证据等级：{report['evidence_level_label']}。"
     if report["evidence_level"] <= EvidenceLevel.EXPLORATORY_CAUSAL_HYPOTHESIS:
         suffix += report["safe_next_step"]
-    if "证据等级" not in revised:
+    if "证据等级" not in revised and not is_descriptive_answer:
         revised += suffix
     claim_issues = next((check["issues"] for check in report["checks"] if check["name"] == "claim"), [])
     if claim_issues:
@@ -80,8 +84,8 @@ def _estimand_validator(state: dict[str, Any]) -> dict[str, Any]:
     unit = spec.get("unit") or _artifact_value(state, "causal_readiness", "unit")
     time = spec.get("time") or _artifact_value(state, "causal_readiness", "time")
     if not unit: missing.append("分析单位未定义")
-    if not time: missing.append("观察时间未定义")
-    return _check("estimand", missing, blocking=bool(missing))
+    warnings = [] if time else ["未提供观察时间，结果只能按当前记录周期解释"]
+    return _check("estimand", missing, warnings=warnings, blocking=bool(missing))
 
 
 def _causal_readiness_validator(state: dict[str, Any]) -> dict[str, Any]:

@@ -21,8 +21,7 @@ def plan_task_steps(task_spec: dict[str, Any], risk_profile: dict[str, Any]) -> 
             {"id": "s4", "phase": "analyze", "tool": "execute_analysis", "goal": "执行 Python Skills 计算"},
         ])
 
-    if not fast:
-        steps.append({"id": "s5", "phase": "verify", "tool": "validate_artifacts", "goal": "统计/因果/隐私校验"})
+    steps.append({"id": "s5", "phase": "verify", "tool": "validate_artifacts", "goal": "校验计算结果、表述与隐私"})
 
     steps.append({"id": "s6", "phase": "write", "tool": "compose_response", "goal": "编排生成行动卡片与报告"})
     return [s for s in steps if not s.get("skip")]
@@ -33,9 +32,6 @@ def default_tool_sequence(risk_profile: dict[str, Any]) -> list[str]:
         return ["clarify"]
     if risk_profile.get("reuse_cache"):
         return ["retrieve_memory", "compile_task", "execute_analysis", "compose_response"]
-    fast = risk_profile.get("budget_level") == "fast_path"
-    seq = ["retrieve_memory", "compile_task", "execute_analysis"]
-    if not fast:
-        seq.append("validate_artifacts")
+    seq = ["retrieve_memory", "compile_task", "execute_analysis", "validate_artifacts"]
     seq.append("compose_response")
     return seq

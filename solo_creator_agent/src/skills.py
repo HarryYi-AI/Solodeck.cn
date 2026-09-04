@@ -25,13 +25,22 @@ COLUMN_ALIASES = {
     "new_followers": ["new_followers", "新增粉丝", "涨粉"],
     "consultations": ["consultations", "咨询", "咨询数"],
     "conversions": ["conversions", "成交", "成交数", "转化"],
+    "conversion_rate": ["conversion_rate", "转化率", "成交率", "购买率"],
+    "consultation_rate": ["consultation_rate", "咨询率", "线索率"],
+    "favorite_rate": ["favorite_rate", "收藏率", "保存率"],
+    "follow_rate": ["follow_rate", "转粉率", "涨粉率"],
+    "visitors": ["visitors", "访客数", "访客", "访问人数"],
     "revenue": ["revenue", "收入", "收益", "amount", "金额"],
     "production_hours": ["production_hours", "制作时长", "制作小时"],
     "account_id": ["account_id", "账号", "账号id"],
     "series_id": ["series_id", "系列", "内容系列"],
 }
 
-NUMERIC_COLUMNS = ["views", "likes", "favorites", "comments", "new_followers", "consultations", "conversions", "revenue", "production_hours"]
+NUMERIC_COLUMNS = [
+    "views", "likes", "favorites", "comments", "new_followers", "consultations",
+    "conversions", "conversion_rate", "consultation_rate", "favorite_rate",
+    "follow_rate", "visitors", "revenue", "production_hours",
+]
 
 DISPLAY_NAMES = {
     "xiaohongshu": "小红书",
@@ -70,13 +79,20 @@ def _safe_div(num: float, den: float) -> float:
 
 def _clean_number(value: Any) -> float:
     if value is None:
-        return 0.0
+        return float("nan")
+    try:
+        if pd.isna(value):
+            return float("nan")
+    except (TypeError, ValueError):
+        pass
     if isinstance(value, str):
         value = value.replace(",", "").replace("¥", "").replace("%", "").strip()
+        if not value:
+            return float("nan")
     try:
         return float(value)
     except Exception:
-        return 0.0
+        return float("nan")
 
 
 def dataset_fingerprint(df: pd.DataFrame) -> str:

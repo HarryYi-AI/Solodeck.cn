@@ -9,8 +9,8 @@ from solodeck_v3.nlp.entity_linker import link_entities
 
 
 TREATMENT_COLUMNS = {"title_style", "platform", "topic", "publish_time", "feature_tags", "production_hours"}
-OUTCOME_COLUMNS = {"consultations", "conversions", "revenue", "favorites", "views"}
-CAUSAL_COMPARE_MARKERS = ("是否", "是不是", "对比", "相比", "比", "更能", "更适合", "提升", "影响", "变化", "有没有")
+OUTCOME_COLUMNS = {"conversion_rate", "consultation_rate", "favorite_rate", "follow_rate", "consultations", "conversions", "revenue", "favorites", "views"}
+CAUSAL_MARKERS = ("因果", "导致", "造成", "归因", "因为", "增量", "影响", "提升了", "带来", "使得", "ate", "cate", "反事实")
 
 
 def compile_with_session(
@@ -70,7 +70,7 @@ def _is_followup(message: str) -> bool:
 def _should_upgrade_to_causal(message: str, spec: TaskSpec, linked_entities: list[dict[str, Any]]) -> bool:
     if spec.task_type in {"causal_effect_estimation", "counterfactual_analysis", "experiment_design"}:
         return True
-    if not any(marker in (message or "") for marker in CAUSAL_COMPARE_MARKERS):
+    if not any(marker in (message or "").lower() for marker in CAUSAL_MARKERS):
         return False
     linked_columns = {item.get("column") for item in linked_entities if item.get("column")}
     has_treatment = bool(linked_columns & TREATMENT_COLUMNS) or bool(set(spec.candidate_treatments) & TREATMENT_COLUMNS)

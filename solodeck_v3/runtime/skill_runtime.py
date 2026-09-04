@@ -8,6 +8,7 @@ from solodeck_v3.skills.causal_discovery_skill import CausalDiscoverySkill
 from solodeck_v3.skills.causal_readiness_skill import CausalReadinessSkill
 from solodeck_v3.skills.counterfactual_skill import CounterfactualSkill
 from solodeck_v3.skills.data_quality_skill import DataQualitySkill
+from solodeck_v3.skills.descriptive_comparison_skill import DescriptiveComparisonSkill
 from solodeck_v3.skills.did_skill import DIDSkill
 from solodeck_v3.skills.kg_construction_skill import KGConstructionSkill
 from solodeck_v3.skills.regression_skill import RegressionSkill
@@ -18,6 +19,7 @@ from solodeck_v3.skills.schema_skill import SchemaSkill
 SKILL_REGISTRY = {
     "SchemaSkill": SchemaSkill,
     "DataQualitySkill": DataQualitySkill,
+    "DescriptiveComparisonSkill": DescriptiveComparisonSkill,
     "DIDSkill": DIDSkill,
     "KGConstructionSkill": KGConstructionSkill,
     "CausalDiscoverySkill": CausalDiscoverySkill,

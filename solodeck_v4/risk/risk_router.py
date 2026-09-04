@@ -5,10 +5,10 @@ from typing import Any
 from solodeck_v3.router.budget_router import route_budget
 
 
-RISK_KEYWORDS = ("因果", "增量", "置信", "混杂", "ab", "实验", "证明", "一定", "必然")
+RISK_KEYWORDS = ("因果", "增量", "置信", "混杂", "ab", "实验", "证明", "一定", "必然", "导致", "造成", "归因", "反事实")
 CHEAP_FOLLOWUP = ("那个", "同样", "继续", "换成", "再看", "呢")
-COMPARE_MARKERS = ("是否", "是不是", "对比", "相比", "比", "更能", "更适合", "提升", "影响", "变化")
-OUTCOME_COLUMNS = {"consultations", "conversions", "revenue", "favorites", "views"}
+CAUSAL_CLAIM_MARKERS = ("因为", "带来", "使得", "影响", "提升了")
+OUTCOME_COLUMNS = {"conversion_rate", "consultation_rate", "favorite_rate", "follow_rate", "consultations", "conversions", "revenue", "favorites", "views"}
 TREATMENT_COLUMNS = {"title_style", "platform", "topic", "publish_time", "feature_tags", "production_hours"}
 
 
@@ -19,7 +19,7 @@ def assess_risk(message: str, task_spec: dict[str, Any], session: dict[str, Any]
     causal_types = {"causal_effect_estimation", "counterfactual_analysis", "causal_hypothesis_generation", "experiment_design"}
 
     needs_clarification = bool(entity_link.get("unresolved")) and not entity_link.get("ready")
-    high_risk = any(k in msg for k in RISK_KEYWORDS) or any(k in msg for k in COMPARE_MARKERS) or task_type in causal_types
+    high_risk = any(k in msg.lower() for k in RISK_KEYWORDS) or any(k in msg for k in CAUSAL_CLAIM_MARKERS) or task_type in causal_types
     cheap_followup = any(k in msg for k in CHEAP_FOLLOWUP) and session.get("artifact_cache")
     if cheap_followup and _has_new_focus(entity_link, session):
         cheap_followup = False

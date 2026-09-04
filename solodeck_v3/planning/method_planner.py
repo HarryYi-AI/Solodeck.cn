@@ -40,12 +40,13 @@ def generate_candidate_plans(task_spec: dict[str, Any], hypothesis_tree: dict[st
             "estimated_cost": 0.14,
         })
     if task_type in {"descriptive_analysis", "data_analysis", "data_quality_repair", "report_generation", "method_comparison"}:
+        comparison_requested = bool(task_spec.get("candidate_treatments") and task_spec.get("candidate_outcomes"))
         base.append({
             "plan_id": "plan_schema_report",
-            "method": "schema_quality_report",
-            "skills": ["SchemaSkill", "DataQualitySkill", "ReportSkill"],
-            "expected_artifacts": ["schema_summary", "data_quality_report", "final_report"],
-            "estimated_cost": 0.08,
+            "method": "descriptive_metric_comparison" if comparison_requested else "schema_quality_report",
+            "skills": ["SchemaSkill", "DataQualitySkill"] + (["DescriptiveComparisonSkill"] if comparison_requested else []) + ["ReportSkill"],
+            "expected_artifacts": ["schema_summary", "data_quality_report"] + (["descriptive_comparison"] if comparison_requested else []) + ["final_report"],
+            "estimated_cost": 0.1 if comparison_requested else 0.08,
         })
     if task_type == "workflow_debugging":
         base.append({

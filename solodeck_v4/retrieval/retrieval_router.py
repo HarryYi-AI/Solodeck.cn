@@ -12,6 +12,7 @@ from solodeck_v4.retrieval.text_retriever import retrieve_text
 INTENTS = {
     "schema_question",
     "metric_question",
+    "comparison_question",
     "relationship_question",
     "causal_question",
     "previous_result_question",
@@ -23,8 +24,9 @@ INTENTS = {
 INTENT_MARKERS = {
     "schema_question": ("字段", "列", "schema", "映射", "有没有", "哪些数据", "数据结构"),
     "metric_question": ("多少", "数值", "指标", "咨询", "成交", "收入", "转化", "播放", "收藏"),
+    "comparison_question": ("哪个更好", "哪个平台", "最高", "最低", "排名", "排序", "谁更高", "谁最好"),
     "relationship_question": ("关系", "关联", "相关", "连接", "邻居", "图谱"),
-    "causal_question": ("因果", "影响", "提升", "是不是", "是否", "相比", "更能", "导致", "confound"),
+    "causal_question": ("因果", "影响", "提升了", "导致", "造成", "归因", "因为", "带来", "使得", "confound"),
     "previous_result_question": ("上次", "之前", "继续", "刚才", "那个结果", "上一轮"),
     "text_feedback_question": ("评论", "反馈", "用户说", "私信", "留言", "吐槽", "文本", "怎么说", "怎么说的"),
     "planning_question": ("计划", "下一步", "怎么做", "行动", "安排", "本周", "下周"),
@@ -44,6 +46,8 @@ def classify_intent(query: str, task_spec: dict[str, Any]) -> str:
     task_type = task_spec.get("task_type") or ""
     if task_type in {"causal_effect_estimation", "counterfactual_analysis"}:
         scores["causal_question"] += 2.0
+    if scores["causal_question"] <= 0 and any(marker in q for marker in ("对比", "相比", "更好", "更高", "更低")):
+        scores["comparison_question"] += 1.5
     if task_type in {"schema_mapping", "data_quality"}:
         scores["schema_question"] += 1.5
     if any(m in q for m in ("上次", "之前", "继续")):
@@ -61,6 +65,7 @@ def route_sources(intent: str) -> list[str]:
     routes = {
         "schema_question": ["schema"],
         "metric_question": ["artifact", "schema"],
+        "comparison_question": ["artifact", "schema", "session"],
         "relationship_question": ["kg"],
         "causal_question": ["kg", "artifact"],
         "previous_result_question": ["artifact", "session"],

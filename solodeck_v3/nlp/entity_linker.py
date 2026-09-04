@@ -18,6 +18,11 @@ PLATFORM_ALIASES = {
 }
 
 OUTCOME_ALIASES = {
+    "转化率": "conversion_rate",
+    "成交率": "conversion_rate",
+    "咨询率": "consultation_rate",
+    "收藏率": "favorite_rate",
+    "转粉率": "follow_rate",
     "咨询": "consultations",
     "私信": "consultations",
     "线索": "consultations",

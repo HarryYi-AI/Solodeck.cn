@@ -24,6 +24,11 @@ def initialize_industrial_state(state: dict[str, Any], *, project_id: str = "sol
     state.setdefault("max_revisions", 2)
     state.setdefault("failure_report", {})
     state.setdefault("memory_updates", [])
+    state.setdefault("tool_audit", [])
+    state.setdefault("permissions", [
+        "memory:read", "schema:read", "plan:write", "analysis:execute",
+        "artifact:validate", "response:write",
+    ])
     return state
 
 
@@ -42,7 +47,17 @@ def finalize_industrial_runtime(
     state["evidence_level"] = governance["evidence_level"]
     state["final_answer"] = governance["answer"]
     state["failure_report"] = _failure_report(governance)
+    from solodeck_v4.critics import evaluate_run
+    critic = evaluate_run(state, phase="postwrite")
+    state["critic_report"] = critic.to_dict()
+    if critic.failures:
+        known = {failure.get("failure_type") for failure in state["failure_report"].get("failures", [])}
+        state["failure_report"].setdefault("failures", []).extend(
+            failure for failure in critic.failures if failure.get("failure_type") not in known
+        )
     state["industrial_process_reward"] = score_process(state, governance)
+    from solodeck_v4.evolution import AdaptivePlanPolicy
+    state["plan_utility_update"] = AdaptivePlanPolicy().update_from_run(state)
     from solodeck_v4.evolution import SkillOptLite
     failures = state["failure_report"].get("failures", [])
     normalized_failures = [

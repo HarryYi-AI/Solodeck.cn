@@ -100,6 +100,8 @@ def _extra_body(profile: str = "basic", config: dict[str, str] | None = None) ->
 
 
 def _chat_completion_with_fallback(request: dict[str, Any], profile: str = "basic") -> tuple[str, dict[str, str]]:
+    from solodeck_v4.observability import generation_observation, update_observation
+
     configs = _profile_configs(profile)
     if not configs:
         raise RuntimeError(f"{profile} 模型 API Key 未配置")
@@ -113,14 +115,39 @@ def _chat_completion_with_fallback(request: dict[str, Any], profile: str = "basi
             next_request["extra_body"] = extra
         else:
             next_request.pop("extra_body", None)
-        try:
-            response = _client_from_config(config).chat.completions.create(**next_request)
-            return response.choices[0].message.content or "", config
-        except Exception as exc:
-            last_error = exc
-            if index == len(configs) - 1:
-                break
-            continue
+        with generation_observation(
+            model=config["model"],
+            profile=profile,
+            attempt=index + 1,
+            message_count=len(next_request.get("messages") or []),
+        ) as observation:
+            try:
+                response = _client_from_config(config).chat.completions.create(**next_request)
+                content = response.choices[0].message.content or ""
+                usage = getattr(response, "usage", None)
+                usage_details = {
+                    "input": getattr(usage, "prompt_tokens", None),
+                    "output": getattr(usage, "completion_tokens", None),
+                    "total": getattr(usage, "total_tokens", None),
+                }
+                update_observation(
+                    observation,
+                    output={"content_length": len(content)},
+                    usage_details={key: value for key, value in usage_details.items() if value is not None},
+                    metadata={"status": "ok", "fallback_used": index > 0},
+                )
+                return content, config
+            except Exception as exc:
+                last_error = exc
+                update_observation(
+                    observation,
+                    output={"status": "error", "error_type": type(exc).__name__},
+                    level="ERROR",
+                    status_message=str(exc)[:200],
+                )
+                if index == len(configs) - 1:
+                    break
+                continue
     assert last_error is not None
     raise last_error
 

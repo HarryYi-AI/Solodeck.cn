@@ -78,6 +78,7 @@ class DataAgentState(TypedDict, total=False):
 SKILL_ROLES = {
     "SchemaSkill": "ExecutorAgent",
     "DataQualitySkill": "ExecutorAgent",
+    "DescriptiveComparisonSkill": "ExecutorAgent",
     "KGConstructionSkill": "RetrieverAgent",
     "CausalDiscoverySkill": "CausalAnalystAgent",
     "CausalReadinessSkill": "VerifierAgent",

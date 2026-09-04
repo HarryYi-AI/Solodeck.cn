@@ -46,6 +46,8 @@ DATASETS: dict[str, pd.DataFrame] = {}
 TEXTS: dict[str, str] = {}
 ANALYSIS_CACHE: dict[str, dict[str, Any]] = {}
 V4_SESSIONS: dict[str, str] = {}
+RUNTIME_DATASET_ROOT = REPO_ROOT / "data" / "runtime_datasets"
+RUNTIME_DATASET_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def _json_safe(value: Any) -> Any:
@@ -109,7 +111,13 @@ def _is_image_file(file: UploadFile) -> bool:
 def _is_text_file(file: UploadFile) -> bool:
     name = (file.filename or "").lower()
     mime = (file.content_type or "").lower()
-    return mime.startswith("text/") or name.endswith((".txt", ".md", ".json"))
+    if name.endswith((".csv", ".tsv")):
+        return False
+    return name.endswith((".txt", ".md", ".json")) or mime in {
+        "text/plain",
+        "text/markdown",
+        "application/json",
+    }
 
 
 def _text_to_frame(text: str) -> pd.DataFrame:
@@ -149,10 +157,42 @@ def _text_to_frame(text: str) -> pd.DataFrame:
 def _get_df(dataset_id: str | None) -> tuple[str, pd.DataFrame]:
     if dataset_id and dataset_id in DATASETS:
         return dataset_id, DATASETS[dataset_id]
+    if dataset_id:
+        persisted = _load_runtime_dataset(dataset_id)
+        if persisted is not None:
+            DATASETS[dataset_id] = persisted
+            return dataset_id, persisted
+        raise KeyError(f"dataset not found: {dataset_id}")
     df = _load_default()
     did = dataset_fingerprint(df)
     DATASETS[did] = df
+    _persist_runtime_dataset(did, df)
     return did, df
+
+
+def _runtime_dataset_path(dataset_id: str) -> Path | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", dataset_id or ""):
+        return None
+    return RUNTIME_DATASET_ROOT / f"{dataset_id}.csv"
+
+
+def _persist_runtime_dataset(dataset_id: str, df: pd.DataFrame, text: str = "") -> None:
+    path = _runtime_dataset_path(dataset_id)
+    if path is None:
+        return
+    df.to_csv(path, index=False)
+    if text.strip():
+        path.with_suffix(".txt").write_text(text[:120000], encoding="utf-8")
+
+
+def _load_runtime_dataset(dataset_id: str) -> pd.DataFrame | None:
+    path = _runtime_dataset_path(dataset_id)
+    if path is None or not path.exists():
+        return None
+    text_path = path.with_suffix(".txt")
+    if text_path.exists():
+        TEXTS[dataset_id] = text_path.read_text(encoding="utf-8")
+    return pd.read_csv(path)
 
 
 def _run(dataset_id: str | None, question_id: str = "pain_point_title") -> dict[str, Any]:
@@ -173,7 +213,16 @@ def _run_agent(dataset_id: str | None, question_id: str = "pain_point_title") ->
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"ok": True, "service": "SoloDeck Skill API"}
+    from solodeck_v4.observability import langfuse_status
+
+    return {"ok": True, "service": "SoloDeck Skill API", "observability": langfuse_status()}
+
+
+@app.get("/api/v4/observability")
+def v4_observability() -> dict[str, Any]:
+    from solodeck_v4.observability import langfuse_status
+
+    return langfuse_status()
 
 
 @app.get("/api/demo")
@@ -239,6 +288,7 @@ async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(de
     did = dataset_fingerprint(df)
     DATASETS[did] = df
     TEXTS[did] = full_text
+    _persist_runtime_dataset(did, df, full_text)
     for key in list(ANALYSIS_CACHE):
         if key.startswith(f"{did}:") or key.startswith(f"agent:{did}:"):
             ANALYSIS_CACHE.pop(key, None)
@@ -246,6 +296,7 @@ async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(de
     final_did = result["dataset_id"]
     DATASETS[final_did] = df
     TEXTS[final_did] = full_text
+    _persist_runtime_dataset(final_did, df, full_text)
     payload = {
         "dataset_id": final_did,
         "mapping": result["mapping"],
@@ -407,8 +458,15 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = did
-    did = V4_SESSIONS.get(session_id) or payload.get("dataset_id")
-    _, df = _get_df(did)
+    persisted_session = get_session(session_id) or {}
+    did = V4_SESSIONS.get(session_id) or persisted_session.get("dataset_id") or payload.get("dataset_id")
+    try:
+        _, df = _get_df(did)
+    except KeyError:
+        return JSONResponse(
+            {"error": "当前会话关联的数据已不可用，请重新上传原文件后继续提问。"},
+            status_code=409,
+        )
     result = run_v4_agent(message, df, session_id, text=TEXTS.get(did or "", ""))
     safe = {
         "session_id": result.get("session_id"),
@@ -429,8 +487,33 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         "cost_spent": result.get("cost_spent"),
         "session_cost_total": result.get("session_cost_total"),
         "version": result.get("version"),
+        "state_id": result.get("state_id"),
+        "analytical_state_summary": _analytical_state_summary(result.get("analytical_state")),
+        "workflow_summary": _workflow_summary(result.get("analysis_workflow"), result.get("workflow_validation")),
     }
     return JSONResponse(_json_safe(safe))
+
+
+def _analytical_state_summary(state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not state:
+        return None
+    allowed = {
+        "state_id", "parent_state_id", "branch_id", "task_id", "dataset_versions",
+        "selected_tables", "selected_columns", "artifacts", "validation_status",
+        "unresolved_questions", "evidence_level",
+    }
+    return {key: state.get(key) for key in allowed}
+
+
+def _workflow_summary(workflow: dict[str, Any] | None, validation: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not workflow:
+        return None
+    return {
+        "workflow_id": workflow.get("workflow_id"),
+        "version": workflow.get("version"),
+        "operations": [node.get("operation_type") for node in workflow.get("physical_nodes") or []],
+        "validation": validation or {},
+    }
 
 
 @app.get("/api/v4/trace/{trace_id}/checkpoints")
@@ -470,6 +553,68 @@ async def v4_memory_trace(project_id: str = "solodeck", session_id: str | None =
         for row in rows
     ]
     return JSONResponse(_json_safe({"project_id": project_id, "session_id": session_id, "items": safe}))
+
+
+@app.get("/api/v4/states/{state_id}")
+async def v4_get_analytical_state(state_id: str) -> JSONResponse:
+    from solodeck_runtime import StateStore
+
+    try:
+        state = StateStore().restore(state_id)
+    except KeyError:
+        return JSONResponse({"error": "analytical state not found"}, status_code=404)
+    return JSONResponse(_json_safe(state.to_dict()))
+
+
+@app.post("/api/v4/states/{state_id}/branch")
+async def v4_branch_analytical_state(state_id: str, payload: dict[str, Any]) -> JSONResponse:
+    from solodeck_runtime import StateStore
+
+    branch_id = str(payload.get("branch_id") or "").strip()
+    if not branch_id:
+        return JSONResponse({"error": "branch_id required"}, status_code=400)
+    allowed = {"filters", "joins", "derived_variables", "hypotheses", "assumptions", "unresolved_questions"}
+    changes = {key: value for key, value in payload.get("changes", {}).items() if key in allowed}
+    try:
+        state = StateStore().branch(state_id, branch_id, **changes)
+    except KeyError:
+        return JSONResponse({"error": "analytical state not found"}, status_code=404)
+    return JSONResponse(_json_safe(state.to_dict()))
+
+
+@app.post("/api/v4/states/{current_state_id}/rollback/{target_state_id}")
+async def v4_rollback_analytical_state(current_state_id: str, target_state_id: str) -> JSONResponse:
+    from solodeck_runtime import StateStore
+
+    try:
+        state = StateStore().rollback(current_state_id, target_state_id)
+    except KeyError:
+        return JSONResponse({"error": "analytical state not found"}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    return JSONResponse(_json_safe(state.to_dict()))
+
+
+@app.get("/api/v4/states/diff/{left_state_id}/{right_state_id}")
+async def v4_diff_analytical_states(left_state_id: str, right_state_id: str) -> JSONResponse:
+    from solodeck_runtime import StateStore
+
+    try:
+        diff = StateStore().diff(left_state_id, right_state_id)
+    except KeyError:
+        return JSONResponse({"error": "analytical state not found"}, status_code=404)
+    return JSONResponse(_json_safe({"left": left_state_id, "right": right_state_id, "diff": diff}))
+
+
+@app.get("/api/v4/artifacts/{artifact_id}/lineage")
+async def v4_artifact_lineage(artifact_id: str) -> JSONResponse:
+    from solodeck_runtime import ArtifactRegistry
+
+    try:
+        lineage = ArtifactRegistry().lineage(artifact_id)
+    except KeyError:
+        return JSONResponse({"error": "artifact not found"}, status_code=404)
+    return JSONResponse(_json_safe(lineage))
 
 
 @app.get("/api/v4/voice/stacks")

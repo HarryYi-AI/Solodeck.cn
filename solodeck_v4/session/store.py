@@ -31,6 +31,8 @@ def create_session(dataset_id: str | None = None, cost_budget: float = 1.0) -> d
         "cost_budget": cost_budget,
         "cost_spent": 0.0,
         "plan_history": [],
+        "last_state_id": None,
+        "state_history": [],
     }
     _save(session)
     return session
