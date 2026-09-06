@@ -1,7 +1,7 @@
 product_id,product_name,category,series_id,launch_date,price,cost,material,color,style,size,weight,feature_tags,target_user,platform,views,clicks,consultations,conversions,revenue,refund_count,review_count,avg_rating,is_new_version,parent_product_id
-P001,SoloBot 情绪陪伴款,hardware_device,solobot,2026-03-25,1299,434.0,铝合金,浅灰,效率,M,178,"emotion_companion,touch_interaction",内容创作者,xiaohongshu,84144,13420,2827,1068,1387332,12,230,4.2,True,
-P002,SoloBot 商务接待款,hardware_device,solobot,2026-04-03,1899,643.58,硅胶,松绿色,可爱,M,783,"voice_interaction,desktop_decoration",小团队老板,bilibili,50107,7719,1177,190,360810,13,46,4.3,False,
-P003,SoloBot 教育陪练款,hardware_device,solobot,2026-04-12,1599,753.79,电子资料,松绿色,商务,M,181,"voice_interaction,weekly_plan",教育机构,douyin,59246,9891,818,98,156702,8,90,4.8,True,
-P004,智能桌面提醒器,home_product,creator_tools,2026-04-21,399,189.86,ABS,浅灰,效率,L,260,"alarm,habit_tracking",小团队老板,wechat,14071,1214,226,56,22344,4,185,4.3,False,P003
-P005,创作者周计划模板,digital_product,creator_tools,2026-04-30,99,33.27,ABS,松绿色,商务,L,325,"weekly_plan,habit_tracking",办公室用户,xiaohongshu,73940,8955,1586,271,26829,11,168,4.5,False,P004
-P006,机器人采购避坑清单,digital_product,creator_tools,2026-05-09,199,59.15,硅胶,雾白,效率,S,432,"case_study,checklist",教育机构,bilibili,83122,15883,1315,480,95520,19,238,4.1,True,P005
+P001,SoloBot 情绪陪伴款,hardware_device,solobot,2026-06-26,1299,434.0,铝合金,浅灰,效率,M,178,"emotion_companion,touch_interaction",内容创作者,xiaohongshu,84144,13420,2827,1068,1387332,12,230,4.2,True,
+P002,SoloBot 商务接待款,hardware_device,solobot,2026-07-05,1899,643.58,硅胶,松绿色,可爱,M,783,"voice_interaction,desktop_decoration",小团队老板,bilibili,50107,7719,1177,190,360810,13,46,4.3,False,
+P003,SoloBot 教育陪练款,hardware_device,solobot,2026-07-14,1599,753.79,电子资料,松绿色,商务,M,181,"voice_interaction,weekly_plan",教育机构,douyin,59246,9891,818,98,156702,8,90,4.8,True,
+P004,智能桌面提醒器,home_product,creator_tools,2026-07-23,399,189.86,ABS,浅灰,效率,L,260,"alarm,habit_tracking",小团队老板,wechat,14071,1214,226,56,22344,4,185,4.3,False,P003
+P005,创作者周计划模板,digital_product,creator_tools,2026-08-01,99,33.27,ABS,松绿色,商务,L,325,"weekly_plan,habit_tracking",办公室用户,xiaohongshu,73940,8955,1586,271,26829,11,168,4.5,False,P004
+P006,机器人采购避坑清单,digital_product,creator_tools,2026-08-10,199,59.15,硅胶,雾白,效率,S,432,"case_study,checklist",教育机构,bilibili,83122,15883,1315,480,95520,19,238,4.1,True,P005

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 import zipfile
 from io import BytesIO
 from pathlib import Path
@@ -31,6 +32,7 @@ from solodeck_v3.workflows.data_agent_graph import run_v3_data_agent
 from solodeck_v4.runtime.runner import create_session, run_v4_agent
 from solodeck_v4.tools.registry import list_tools
 from solodeck_v4.session.store import get_session
+from solodeck_runtime.workspace import DataWorkspaceRepository
 
 
 app = FastAPI(title="SoloDeck Skill API", version="4.0.0")
@@ -48,6 +50,14 @@ ANALYSIS_CACHE: dict[str, dict[str, Any]] = {}
 V4_SESSIONS: dict[str, str] = {}
 RUNTIME_DATASET_ROOT = REPO_ROOT / "data" / "runtime_datasets"
 RUNTIME_DATASET_ROOT.mkdir(parents=True, exist_ok=True)
+WORKSPACES = DataWorkspaceRepository()
+
+
+def _workspace_id(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_-]{8,96}", candidate):
+        return candidate
+    return "workspace_local"
 
 
 def _json_safe(value: Any) -> Any:
@@ -199,7 +209,13 @@ def _run(dataset_id: str | None, question_id: str = "pain_point_title") -> dict[
     did, df = _get_df(dataset_id)
     key = f"{did}:{question_id}"
     if key not in ANALYSIS_CACHE:
-        ANALYSIS_CACHE[key] = run_skill_pipeline(df, question_id=question_id)
+        result = run_skill_pipeline(df, question_id=question_id)
+        result_id = result.get("dataset_id") or did
+        # Mapping produces a canonical-data fingerprint. Keep that public ID
+        # recoverable after process restarts as well as in the current process.
+        DATASETS[result_id] = df
+        _persist_runtime_dataset(result_id, df, TEXTS.get(did, ""))
+        ANALYSIS_CACHE[key] = result
     return ANALYSIS_CACHE[key]
 
 
@@ -232,9 +248,14 @@ def demo() -> JSONResponse:
 
 
 @app.post("/api/upload")
-async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(default="")) -> JSONResponse:
+async def upload(
+    files: list[UploadFile] = File(default=[]),
+    text: str = Form(default=""),
+    workspace_id: str = Form(default=""),
+) -> JSONResponse:
     frames = []
     notes = []
+    source_names = [file.filename or "未命名文件" for file in files]
     image_files: list[Any] = []
     extracted_tasks: list[dict[str, Any]] = []
     text_fragments = [text] if text else []
@@ -297,14 +318,71 @@ async def upload(files: list[UploadFile] = File(default=[]), text: str = Form(de
     DATASETS[final_did] = df
     TEXTS[final_did] = full_text
     _persist_runtime_dataset(final_did, df, full_text)
+    dataset = WORKSPACES.register_dataset(
+        _workspace_id(workspace_id),
+        final_did,
+        "、".join(source_names[:3]) if source_names else "粘贴文本",
+        "文件上传" if source_names else "文本输入",
+        _runtime_dataset_path(final_did) or "",
+        df,
+        result.get("mapping") or {},
+    )
     payload = {
         "dataset_id": final_did,
+        "dataset": dataset,
         "mapping": result["mapping"],
         "notes": notes,
         "tasks": extracted_tasks,
         "trace": result["trace"][:1],
     }
     return JSONResponse(_json_safe(payload))
+
+
+@app.post("/api/data-agent/demo")
+async def data_agent_demo(payload: dict[str, Any]) -> JSONResponse:
+    workspace_id = _workspace_id(payload.get("workspace_id"))
+    result = _run(None)
+    did, frame = _get_df(result["dataset_id"])
+    dataset = WORKSPACES.register_dataset(
+        workspace_id,
+        did,
+        "SoloDeck 经营分析演示数据",
+        "演示数据",
+        _runtime_dataset_path(did) or "",
+        frame,
+        result.get("mapping") or {},
+    )
+    return JSONResponse(_json_safe({"dataset_id": did, "mapping": result.get("mapping"), "dataset": dataset}))
+
+
+@app.get("/api/data-agent/workspace")
+async def data_agent_workspace(workspace_id: str = "") -> JSONResponse:
+    current = _workspace_id(workspace_id)
+    datasets = WORKSPACES.list_datasets(current)
+    runs = WORKSPACES.list_runs(current)
+    return JSONResponse(_json_safe({
+        "workspace_id": current,
+        "datasets": datasets,
+        "runs": runs,
+        "summary": {
+            "dataset_count": len(datasets),
+            "run_count": len(runs),
+            "total_rows": sum(item["row_count"] for item in datasets),
+        },
+    }))
+
+
+@app.get("/api/data-agent/datasets/{dataset_id}")
+async def data_agent_dataset(dataset_id: str, workspace_id: str = "") -> JSONResponse:
+    current = _workspace_id(workspace_id)
+    dataset = WORKSPACES.get_dataset(current, dataset_id)
+    if not dataset:
+        return JSONResponse({"error": "数据集不存在或不属于当前工作区。"}, status_code=404)
+    try:
+        _get_df(dataset_id)
+    except KeyError:
+        return JSONResponse({"error": "数据文件已丢失，请重新上传。"}, status_code=410)
+    return JSONResponse(_json_safe(dataset))
 
 
 @app.post("/api/diagnose")
@@ -454,7 +532,13 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         return JSONResponse({"error": "message required"}, status_code=400)
     session_id = payload.get("session_id")
     if not session_id:
-        did, _ = _get_df(payload.get("dataset_id"))
+        try:
+            did, _ = _get_df(payload.get("dataset_id"))
+        except KeyError:
+            return JSONResponse(
+                {"error": "当前数据已不可用，请重新上传原文件后继续提问。"},
+                status_code=409,
+            )
         session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = did
@@ -488,10 +572,76 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         "session_cost_total": result.get("session_cost_total"),
         "version": result.get("version"),
         "state_id": result.get("state_id"),
+        "result_view": result.get("result_view"),
+        "executed_skills": result.get("selected_skills"),
         "analytical_state_summary": _analytical_state_summary(result.get("analytical_state")),
         "workflow_summary": _workflow_summary(result.get("analysis_workflow"), result.get("workflow_validation")),
     }
     return JSONResponse(_json_safe(safe))
+
+
+@app.post("/api/data-agent/query")
+async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
+    message = (payload.get("message") or payload.get("task") or "").strip()
+    if not message:
+        return JSONResponse({"error": "请输入要分析的问题。"}, status_code=400)
+    workspace_id = _workspace_id(payload.get("workspace_id"))
+    dataset_id = str(payload.get("dataset_id") or "")
+    if not WORKSPACES.get_dataset(workspace_id, dataset_id):
+        return JSONResponse({"error": "请先在数据目录上传或选择一个数据集。"}, status_code=409)
+    try:
+        _, frame = _get_df(dataset_id)
+    except KeyError:
+        return JSONResponse({"error": "当前数据文件已不可用，请重新上传。"}, status_code=410)
+
+    session_id = payload.get("session_id")
+    persisted_session = get_session(session_id) if session_id else None
+    if not persisted_session or persisted_session.get("dataset_id") != dataset_id:
+        session = create_session(dataset_id=dataset_id, cost_budget=float(payload.get("cost_budget", 10.0)))
+        session_id = session["session_id"]
+        V4_SESSIONS[session_id] = dataset_id
+    started = time.perf_counter()
+    result = run_v4_agent(message, frame, session_id, text=TEXTS.get(dataset_id, ""))
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    result_view = result.get("result_view") or {}
+    run = WORKSPACES.save_run(workspace_id, dataset_id, message, result, result_view, elapsed_ms)
+    safe = {
+        "session_id": result.get("session_id"),
+        "trace_id": result.get("trace_id"),
+        "reply": result.get("reply"),
+        "user_artifact": result.get("user_artifact"),
+        "task_spec": result.get("task_spec"),
+        "plan_steps": result.get("plan_steps"),
+        "tool_calls": result.get("tool_calls"),
+        "risk_profile": result.get("risk_profile"),
+        "validation_report": result.get("validation_report"),
+        "post_writer_validation": result.get("post_writer_validation"),
+        "evidence_level": result.get("evidence_level"),
+        "failure_report": result.get("failure_report"),
+        "memory_updates": result.get("memory_updates"),
+        "cost_spent": result.get("cost_spent"),
+        "state_id": result.get("state_id"),
+        "result_view": result_view,
+        "executed_skills": result.get("selected_skills"),
+        "analytical_state_summary": _analytical_state_summary(result.get("analytical_state")),
+        "workflow_summary": _workflow_summary(result.get("analysis_workflow"), result.get("workflow_validation")),
+        "run": run,
+    }
+    return JSONResponse(_json_safe(safe))
+
+
+@app.get("/api/data-agent/runs")
+async def data_agent_runs(workspace_id: str = "") -> JSONResponse:
+    current = _workspace_id(workspace_id)
+    return JSONResponse(_json_safe({"runs": WORKSPACES.list_runs(current)}))
+
+
+@app.get("/api/data-agent/runs/{run_id}")
+async def data_agent_run(run_id: str, workspace_id: str = "") -> JSONResponse:
+    run = WORKSPACES.get_run(_workspace_id(workspace_id), run_id)
+    if not run:
+        return JSONResponse({"error": "运行记录不存在。"}, status_code=404)
+    return JSONResponse(_json_safe(run))
 
 
 def _analytical_state_summary(state: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -638,12 +788,24 @@ async def v4_voice_turn(payload: dict[str, Any]) -> JSONResponse:
 
     session_id = payload.get("session_id")
     if not session_id:
-        did, _ = _get_df(payload.get("dataset_id"))
+        try:
+            did, _ = _get_df(payload.get("dataset_id"))
+        except KeyError:
+            return JSONResponse(
+                {"error": "当前数据已不可用，请重新上传原文件后继续提问。"},
+                status_code=409,
+            )
         session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = did
     did = V4_SESSIONS.get(session_id) or payload.get("dataset_id")
-    _, df = _get_df(did)
+    try:
+        _, df = _get_df(did)
+    except KeyError:
+        return JSONResponse(
+            {"error": "当前会话关联的数据已不可用，请重新上传原文件后继续提问。"},
+            status_code=409,
+        )
 
     runner = make_v4_runner(df, session_id, TEXTS.get(did or "", ""))
     columns = list(df.columns) if not df.empty else ["platform", "title_style", "consultations"]

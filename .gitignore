@@ -24,6 +24,7 @@ data/solodeck_v4_sessions/
 data/runtime_checkpoints/
 data/runtime_datasets/
 data/memory/
+data/trajectories/
 solodeck_v3/bench/generated_failures/
 agent_state.json
 task_board.json

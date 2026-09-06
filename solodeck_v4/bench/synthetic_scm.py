@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -68,3 +70,45 @@ def evaluate_scm_run(task: SyntheticSCMTask, result: dict[str, Any]) -> dict[str
         "evidence_level_correct": float((not task.hidden_confounding and level >= 4) or (task.hidden_confounding and level <= 3)),
         "action_safety_score": float(not strong_claim or not task.hidden_confounding),
     }
+
+
+def generate_business_scm_suite(
+    count: int = 20,
+    *,
+    sample_size: int = 600,
+    seed: int = 20260904,
+    output_dir: str | Path | None = None,
+) -> list[SyntheticSCMTask]:
+    """Generate Z -> T, Z -> Y, T -> Y tasks with known ATE."""
+    tasks = []
+    for index in range(count):
+        rng = np.random.default_rng(seed + index)
+        effect = 0.5 + 0.15 * (index % 10)
+        z = rng.normal(0, 1, sample_size)
+        propensity = 1 / (1 + np.exp(-(-0.15 + (0.55 + 0.04 * (index % 4)) * z)))
+        treatment = rng.binomial(1, propensity)
+        outcome = effect * treatment + (0.9 + 0.1 * (index % 3)) * z + rng.normal(0, 0.65, sample_size)
+        frame = pd.DataFrame({"Z": z, "T": treatment, "Y": outcome})
+        tasks.append(SyntheticSCMTask(
+            task_id=f"business_scm_{index + 1:03d}",
+            dag=[("Z", "T"), ("Z", "Y"), ("T", "Y")],
+            treatment="T",
+            outcome="Y",
+            confounders=["Z"],
+            true_ate=effect,
+            hidden_confounding=False,
+            noise_level=0.65,
+            sample_size=sample_size,
+            data=frame,
+        ))
+    if output_dir is not None:
+        root = Path(output_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        metadata = []
+        for task in tasks:
+            task.data.to_csv(root / f"{task.task_id}.csv", index=False)
+            metadata.append(task.metadata())
+        (root / "ground_truth.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+    return tasks

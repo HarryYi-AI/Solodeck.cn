@@ -109,6 +109,7 @@ def _dispatch_tool(
         "cost": float(result.get("cost", contract.cost_hint)),
         "contract_version": contract.version,
         "arg_keys": sorted(args),
+        "arguments": _safe_arguments(args),
         "side_effects": list(contract.side_effects),
     }
     return result, audit
@@ -150,6 +151,23 @@ def _safe_error(value: str | None) -> str | None:
     if value is None:
         return None
     return value[:300]
+
+
+def _safe_arguments(value: dict[str, Any]) -> dict[str, Any]:
+    """Keep policy inputs traceable without serializing frames or large user data."""
+    safe = {}
+    for key, item in list(value.items())[:20]:
+        if hasattr(item, "shape"):
+            safe[str(key)] = {"type": type(item).__name__, "shape": list(item.shape)}
+        elif isinstance(item, (str, int, float, bool)) or item is None:
+            safe[str(key)] = item if not isinstance(item, str) else item[:300]
+        elif isinstance(item, (list, tuple)):
+            safe[str(key)] = list(item[:20])
+        elif isinstance(item, dict):
+            safe[str(key)] = {str(k): str(v)[:120] for k, v in list(item.items())[:20]}
+        else:
+            safe[str(key)] = {"type": type(item).__name__}
+    return safe
 
 
 @contextmanager

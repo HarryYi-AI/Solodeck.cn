@@ -23,6 +23,10 @@ RATE_NUMERATORS = {
 
 DISPLAY_NAMES = {
     "platform": "平台",
+    "title_style": "标题风格",
+    "topic": "主题",
+    "publish_time": "发布时间",
+    "feature_tags": "产品功能",
     "conversion_rate": "转化率",
     "consultation_rate": "咨询率",
     "favorite_rate": "收藏率",
@@ -31,6 +35,10 @@ DISPLAY_NAMES = {
     "consultations": "咨询数",
     "revenue": "收入",
     "views": "播放量",
+    "title": "内容",
+    "content_id": "内容",
+    "product_name": "产品",
+    "product_id": "产品",
 }
 
 PLATFORM_NAMES = {
@@ -47,6 +55,11 @@ PLATFORM_NAMES = {
     "jd": "京东",
     "youtube": "YouTube",
     "tiktok": "TikTok",
+    "substack": "Substack",
+    "instagram": "Instagram",
+    "zhihu": "知乎",
+    "x": "X / Twitter",
+    "twitter": "X / Twitter",
 }
 
 
@@ -66,8 +79,9 @@ class DescriptiveComparisonSkill(BaseSkill):
             return SkillOutput("descriptive_comparison", "descriptive_result", {}, valid=False, warnings=["没有可比较的数据"])
 
         data = df.copy()
-        group_col = self._pick_group(data, spec)
-        metric, is_rate, numerator, denominator = self._pick_metric(data, spec)
+        message = str(state.get("message") or spec.get("objective") or "")
+        group_col = self._pick_group(data, spec, message)
+        metric, is_rate, numerator, denominator = self._pick_metric(data, spec, message)
         if not group_col or not metric:
             return SkillOutput(
                 "descriptive_comparison",
@@ -76,13 +90,17 @@ class DescriptiveComparisonSkill(BaseSkill):
                 valid=False,
                 warnings=["缺少分组字段或可计算指标"],
             )
+        data, scope = self._filter_context(data, group_col, message)
+        data = self._filter_requested_groups(data, group_col, message)
+        strategy_group = group_col in {"title_style", "topic", "publish_time", "hour", "feature_tags"}
 
         if numerator and denominator:
             grouped, usable = self._aggregate_derived_rate(data, group_col, numerator, denominator)
         else:
             data[metric] = pd.to_numeric(data[metric], errors="coerce")
             usable = data.dropna(subset=[group_col, metric]).copy()
-            grouped = usable.groupby(group_col, dropna=False)[metric].agg(["mean", "count"]).sort_values("mean", ascending=False)
+            aggregation = "mean" if is_rate or strategy_group or any(word in message for word in ("平均", "均值", "每条")) else "sum"
+            grouped = usable.groupby(group_col, dropna=False)[metric].agg([aggregation, "count"]).rename(columns={aggregation: "mean"}).sort_values("mean", ascending=False)
 
         ranking = [
             {
@@ -110,6 +128,9 @@ class DescriptiveComparisonSkill(BaseSkill):
             "unavailable_groups": unavailable_groups,
             "denominator": denominator,
             "sample_size": int(len(usable)),
+            "aggregation": "比率" if numerator and denominator else ("平均值" if is_rate or strategy_group or any(word in message for word in ("平均", "均值", "每条")) else "合计"),
+            "requested_limit": self._requested_limit(message),
+            "scope": scope,
         }
 
         if len(ranking) < 2:
@@ -152,7 +173,15 @@ class DescriptiveComparisonSkill(BaseSkill):
         return grouped.sort_values("mean", ascending=False), usable
 
     @staticmethod
-    def _pick_group(df: pd.DataFrame, spec: dict[str, Any]) -> str | None:
+    def _pick_group(df: pd.DataFrame, spec: dict[str, Any], message: str = "") -> str | None:
+        if any(word in message for word in ("内容", "作品", "帖子", "视频")):
+            for column in ("title", "content_id"):
+                if column in df.columns and df[column].nunique(dropna=True) >= 2:
+                    return column
+        if any(word in message for word in ("产品", "商品", "款式")):
+            for column in ("product_name", "product_id", "feature_tags"):
+                if column in df.columns and df[column].nunique(dropna=True) >= 2:
+                    return column
         candidates = list(spec.get("candidate_treatments") or []) + ["platform", "topic", "title_style"]
         for column in candidates:
             if column in df.columns and df[column].nunique(dropna=True) >= 2:
@@ -160,10 +189,19 @@ class DescriptiveComparisonSkill(BaseSkill):
         return None
 
     @staticmethod
-    def _pick_metric(df: pd.DataFrame, spec: dict[str, Any]) -> tuple[str | None, bool, str | None, str | None]:
+    def _pick_metric(df: pd.DataFrame, spec: dict[str, Any], message: str = "") -> tuple[str | None, bool, str | None, str | None]:
         requested = list(spec.get("candidate_outcomes") or [])
+        explicit_rates = []
+        for metric, markers in {
+            "conversion_rate": ("转化率", "成交率", "购买率", "转化更好"),
+            "consultation_rate": ("咨询率", "线索率"),
+            "favorite_rate": ("收藏率", "保存率"),
+            "follow_rate": ("转粉率", "涨粉率"),
+        }.items():
+            if any(marker in message.lower() for marker in markers):
+                explicit_rates.append(metric)
         preferred = ["conversion_rate", "consultation_rate", "favorite_rate", "follow_rate"]
-        candidates = list(dict.fromkeys(preferred + requested + ["revenue", "conversions", "consultations", "views"]))
+        candidates = list(dict.fromkeys(explicit_rates + requested + preferred + ["revenue", "conversions", "consultations", "views"]))
         for metric in candidates:
             if metric in df.columns and pd.to_numeric(df[metric], errors="coerce").notna().any():
                 return metric, metric.endswith("_rate"), None, None
@@ -188,4 +226,63 @@ class DescriptiveComparisonSkill(BaseSkill):
     @staticmethod
     def _display_group(value: Any) -> str:
         raw = str(value)
-        return PLATFORM_NAMES.get(raw.lower(), raw)
+        return {
+            **PLATFORM_NAMES,
+            "pain_point": "痛点型",
+            "tutorial": "教程型",
+            "numbered": "数字型",
+            "question": "提问型",
+        }.get(raw.lower(), raw)
+
+    @staticmethod
+    def _requested_limit(message: str) -> int:
+        import re
+
+        match = re.search(r"(?:前|top\s*)(\d{1,2})|([1-9]\d?)\s*条", message.lower())
+        if not match:
+            return 6
+        return max(1, min(int(match.group(1) or match.group(2)), 20))
+
+    @staticmethod
+    def _filter_requested_groups(df: pd.DataFrame, group_col: str, message: str) -> pd.DataFrame:
+        if group_col != "title_style":
+            return df
+        requested: list[set[str]] = []
+        aliases = {
+            "痛点": {"pain_point", "pain-point", "痛点", "痛点型"},
+            "教程": {"tutorial", "教程", "教程型"},
+            "数字": {"number", "numbered", "数字", "数字型", "listicle"},
+            "提问": {"question", "提问", "疑问型"},
+        }
+        for mention, values in aliases.items():
+            if mention in message:
+                requested.append(values)
+        if len(requested) < 2:
+            return df
+        allowed = set().union(*requested)
+        normalized = df[group_col].astype(str).str.lower()
+        filtered = df[normalized.isin({value.lower() for value in allowed})]
+        return filtered if filtered[group_col].nunique(dropna=True) >= 2 else df
+
+    @staticmethod
+    def _filter_context(df: pd.DataFrame, group_col: str, message: str) -> tuple[pd.DataFrame, dict[str, str]]:
+        """Apply an explicitly named platform as scope when platform is not the comparison axis."""
+        if group_col == "platform" or "platform" not in df.columns:
+            return df, {}
+        aliases = {
+            "小红书": {"小红书", "xiaohongshu", "rednote"},
+            "B站": {"b站", "bilibili"},
+            "抖音": {"抖音", "douyin"},
+            "公众号/视频号": {"公众号", "视频号", "wechat", "weixin"},
+            "快手": {"快手", "kuaishou"},
+            "淘宝": {"淘宝", "taobao"},
+            "美团": {"美团", "meituan"},
+        }
+        lowered_message = message.lower()
+        normalized = df["platform"].astype(str).str.strip().str.lower()
+        for label, values in aliases.items():
+            if any(mention.lower() in lowered_message for mention in values):
+                filtered = df[normalized.isin({value.lower() for value in values})]
+                if not filtered.empty:
+                    return filtered, {"platform": label}
+        return df, {}

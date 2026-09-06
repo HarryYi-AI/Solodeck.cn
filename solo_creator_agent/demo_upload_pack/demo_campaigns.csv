@@ -1,9 +1,9 @@
 campaign_id,brand_name,campaign_name,platform,deliverables,price,deadline,status,payment_status,invoice_status,revision_count,report_status,related_content_id
-BIZ001,青石智能,商用机器人推广,xiaohongshu,1篇深度内容,12800,2026-06-05,negotiating,fully_paid,not_needed,2,sent,C001
-BIZ002,北岸效率,商用机器人推广,wechat,2条短视频 + 数据复盘,9800,2026-06-24,confirmed,overdue,issued,1,sent,C004
-BIZ003,明河机器人,商用机器人推广,douyin,2条短视频 + 数据复盘,18800,2026-06-05,scripting,fully_paid,pending,2,generated,C007
-BIZ004,云谷SaaS,效率产品深度评测,bilibili,1篇图文 + 1条短视频,26000,2026-06-17,reviewing,deposit_received,issued,1,not_started,C010
-BIZ005,晴山生活,效率产品深度评测,xiaohongshu,1篇深度内容,18800,2026-06-05,published,deposit_received,not_needed,2,not_started,C013
-BIZ006,鲸川硬件,AI工具联合内容,wechat,1篇图文 + 1条短视频,18800,2026-06-08,reporting,overdue,issued,1,sent,C016
-BIZ007,青石智能,效率产品深度评测,douyin,1篇深度内容,18800,2026-06-17,completed,deposit_received,pending,1,not_started,C019
-BIZ008,北岸效率,新品种草,bilibili,1篇图文 + 1条短视频,9800,2026-06-24,negotiating,unpaid,not_needed,1,sent,C022
+BIZ001,青石智能,商用机器人推广,xiaohongshu,1篇深度内容,12800,2026-09-06,negotiating,fully_paid,not_needed,2,sent,C001
+BIZ002,北岸效率,商用机器人推广,wechat,2条短视频 + 数据复盘,9800,2026-09-25,confirmed,overdue,issued,1,sent,C004
+BIZ003,明河机器人,商用机器人推广,douyin,2条短视频 + 数据复盘,18800,2026-09-06,scripting,fully_paid,pending,2,generated,C007
+BIZ004,云谷SaaS,效率产品深度评测,bilibili,1篇图文 + 1条短视频,26000,2026-09-18,reviewing,deposit_received,issued,1,not_started,C010
+BIZ005,晴山生活,效率产品深度评测,xiaohongshu,1篇深度内容,18800,2026-09-06,published,deposit_received,not_needed,2,not_started,C013
+BIZ006,鲸川硬件,AI工具联合内容,wechat,1篇图文 + 1条短视频,18800,2026-09-09,reporting,overdue,issued,1,sent,C016
+BIZ007,青石智能,效率产品深度评测,douyin,1篇深度内容,18800,2026-09-18,completed,deposit_received,pending,1,not_started,C019
+BIZ008,北岸效率,新品种草,bilibili,1篇图文 + 1条短视频,9800,2026-09-25,negotiating,unpaid,not_needed,1,sent,C022

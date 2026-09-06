@@ -52,7 +52,7 @@ def govern_claims(state: dict[str, Any], draft: str) -> dict[str, Any]:
     suffix = f"\n证据等级：{report['evidence_level_label']}。"
     if report["evidence_level"] <= EvidenceLevel.EXPLORATORY_CAUSAL_HYPOTHESIS:
         suffix += report["safe_next_step"]
-    if "证据等级" not in revised and not is_descriptive_answer:
+    if "证据等级" not in revised and not is_descriptive_answer and _is_causal(state):
         revised += suffix
     claim_issues = next((check["issues"] for check in report["checks"] if check["name"] == "claim"), [])
     if claim_issues:

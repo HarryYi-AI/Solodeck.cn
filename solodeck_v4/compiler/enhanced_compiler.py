@@ -10,7 +10,7 @@ from solodeck_v3.nlp.entity_linker import link_entities
 
 TREATMENT_COLUMNS = {"title_style", "platform", "topic", "publish_time", "feature_tags", "production_hours"}
 OUTCOME_COLUMNS = {"conversion_rate", "consultation_rate", "favorite_rate", "follow_rate", "consultations", "conversions", "revenue", "favorites", "views"}
-CAUSAL_MARKERS = ("因果", "导致", "造成", "归因", "因为", "增量", "影响", "提升了", "带来", "使得", "ate", "cate", "反事实")
+CAUSAL_MARKERS = ("因果", "导致", "造成", "归因", "控制混杂", "控制其他因素", "净增量", "ate", "cate", "反事实")
 
 
 def compile_with_session(

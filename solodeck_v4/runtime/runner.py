@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -41,6 +42,13 @@ def run_v4_agent(
             },
         )
         record_agent_scores(observation, result)
+        try:
+            from solodeck_eval.trajectory import log_agent_result
+
+            rows = log_agent_result(result, message)
+            result["trajectory_log"] = {"step_count": len(rows), "schema_version": "1.0"}
+        except Exception as exc:
+            result["trajectory_log"] = {"step_count": 0, "error": type(exc).__name__, "schema_version": "1.0"}
         return result
 
 
@@ -244,7 +252,8 @@ def execute_state_command(message: str, session: dict[str, Any], store: Any | No
     store = store or StateStore()
     history = [item.get("state_id") for item in session.get("state_history") or [] if item.get("state_id")]
     current_id = session.get("last_state_id") or (history[-1] if history else None)
-    explicit = next((token.strip("，。,.()[]") for token in message.split() if token.startswith("state_")), None)
+    match = re.search(r"\bstate_[A-Za-z0-9_-]{8,128}\b", message)
+    explicit = match.group(0) if match else None
     target_id = explicit or (history[-2] if len(history) >= 2 else None)
     if not current_id or not target_id:
         return {
@@ -388,6 +397,8 @@ def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str,
 
 def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
     session = get_session(state["session_id"]) or {}
+    from solodeck_runtime.result_view import build_result_view
+
     return {
         "session_id": state["session_id"],
         "trace_id": state.get("trace_id"),
@@ -424,7 +435,9 @@ def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
         "failure_report": state.get("failure_report"),
         "memory_updates": state.get("memory_updates"),
         "skill_manifests": state.get("skill_manifests"),
+        "selected_skills": list(dict.fromkeys(state.get("selected_skills") or [])),
         "trace": state.get("trace"),
+        "result_view": build_result_view(state),
         "version": "4.0.0",
     }
 

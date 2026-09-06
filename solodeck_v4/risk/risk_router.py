@@ -5,9 +5,9 @@ from typing import Any
 from solodeck_v3.router.budget_router import route_budget
 
 
-RISK_KEYWORDS = ("因果", "增量", "置信", "混杂", "ab", "实验", "证明", "一定", "必然", "导致", "造成", "归因", "反事实")
+RISK_KEYWORDS = ("因果", "净增量", "置信", "混杂", "ab", "实验", "证明", "一定", "必然", "导致", "造成", "归因", "反事实")
 CHEAP_FOLLOWUP = ("那个", "同样", "继续", "换成", "再看", "呢")
-CAUSAL_CLAIM_MARKERS = ("因为", "带来", "使得", "影响", "提升了")
+CAUSAL_CLAIM_MARKERS = ("是否由", "是不是因为", "因果效应", "控制其他因素", "排除其他因素")
 OUTCOME_COLUMNS = {"conversion_rate", "consultation_rate", "favorite_rate", "follow_rate", "consultations", "conversions", "revenue", "favorites", "views"}
 TREATMENT_COLUMNS = {"title_style", "platform", "topic", "publish_time", "feature_tags", "production_hours"}
 

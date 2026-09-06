@@ -44,7 +44,7 @@ def compile_user_goal(user_goal: str, structured_data: pd.DataFrame, unstructure
         task_type = "experiment_design"
     elif any(w in goal for w in ["反事实", "what-if", "如果", "counterfactual", "模拟"]):
         task_type = "counterfactual_analysis"
-    elif any(w in goal for w in ["因果", "增量", "影响", "提升", "ate", "cate", "ab", "实验", "effect", "bootstrap", "置信", "区间", "稳定"]):
+    elif any(w in goal for w in ["因果", "净增量", "归因", "导致", "ate", "cate", "ab", "实验", "effect", "bootstrap", "置信", "区间", "稳定"]):
         task_type = "causal_effect_estimation"
     elif any(w in goal for w in ["知识图谱", "kg", "graph", "dag", "变量关系", "关系图"]):
         task_type = "causal_hypothesis_generation"

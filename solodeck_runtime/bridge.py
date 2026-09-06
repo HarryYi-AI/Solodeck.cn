@@ -9,6 +9,25 @@ from .persistence import ArtifactRegistry, SQLiteRuntimeRepository, StateStore
 from .workflow import WorkflowCompiler, WorkflowValidator
 
 
+EVIDENCE_LEVEL_NAMES = {
+    1: "descriptive_pattern",
+    2: "adjusted_association",
+    3: "exploratory_causal_hypothesis",
+    4: "quasi_causal_estimate",
+    5: "experimental_evidence",
+}
+
+
+def _canonical_evidence_level(state: dict[str, Any]) -> str:
+    raw_level = state.get("evidence_level")
+    if raw_level is None:
+        raw_level = (state.get("governance_report") or {}).get("evidence_level")
+    try:
+        return EVIDENCE_LEVEL_NAMES.get(int(raw_level), str(raw_level))
+    except (TypeError, ValueError):
+        return str(raw_level or "descriptive_pattern")
+
+
 def prepare_runtime_protocol(state: dict[str, Any], repository: SQLiteRuntimeRepository | None = None) -> dict[str, Any]:
     repository = repository or SQLiteRuntimeRepository()
     task = TaskSpec.from_legacy(
@@ -90,7 +109,7 @@ def finalize_runtime_protocol(
         executed_nodes=[item.get("step") or item.get("node") for item in state.get("trace") or [] if item.get("step") or item.get("node")],
         artifacts=artifact_ids, validation_status="valid" if (state.get("governance_report") or {}).get("valid") else "needs_review",
         unresolved_questions=list(task.get("clarification_requirements") or []),
-        evidence_level=str(state.get("evidence_level") or "descriptive_pattern"), final_conclusions=[reply] if reply else [],
+        evidence_level=_canonical_evidence_level(state), final_conclusions=[reply] if reply else [],
     )
     StateStore(repository).snapshot(analytical)
     state["analytical_state"] = analytical.to_dict()

@@ -1,16 +1,24 @@
-import React, { useEffect, useMemo, useRef, useState, Suspense } from "react";
+import React, { lazy, useEffect, useMemo, useRef, useState, Suspense } from "react";
 import { createRoot } from "react-dom/client";
-import { ArrowRight, CheckCircle2, FileUp, Loader2, MessageSquare, PauseCircle, Rocket, ShieldCheck, UploadCloud, Mic, MicOff } from "lucide-react";
+import {
+  Activity, ArrowRight, BarChart3, Check, CheckCircle2, ChevronDown, Circle,
+  Database, FileText, FileUp, GitBranch, History, Layers3, Loader2, Menu,
+  MessageSquare, Mic, MicOff, PanelRightClose, PanelRightOpen, PauseCircle,
+  Rocket, Search, Send, ShieldCheck, Sparkles, Table2, UploadCloud, Workflow, X
+} from "lucide-react";
 import "./styles.css";
 
 const pages = [
-  { id: "chat", label: "对话分析", icon: MessageSquare },
-  { id: "upload", label: "上传数据", icon: FileUp },
-  { id: "diagnose", label: "经营诊断", icon: ShieldCheck },
-  { id: "decision", label: "决策检查", icon: CheckCircle2 },
-  { id: "agent", label: "图谱与因果", icon: ArrowRight },
-  { id: "actions", label: "行动计划", icon: ArrowRight }
+  { id: "chat", label: "数据工作台", icon: MessageSquare },
+  { id: "upload", label: "数据目录", icon: Database },
+  { id: "runs", label: "运行记录", icon: History },
+  { id: "diagnose", label: "数据质量", icon: BarChart3 },
+  { id: "decision", label: "专业分析", icon: ShieldCheck },
+  { id: "agent", label: "关系探索", icon: GitBranch },
+  { id: "actions", label: "行动方案", icon: CheckCircle2 }
 ];
+
+const ResultChart = lazy(() => import("./ResultChart.jsx"));
 
 const questions = [
   { id: "pain_point_title", label: "痛点标题是否提升咨询" },
@@ -37,6 +45,11 @@ const displayMap = {
   xiaohongshu: "小红书",
   wechat: "公众号/视频号",
   zhihu: "知乎",
+  substack: "Substack",
+  instagram: "Instagram",
+  x: "X / Twitter",
+  twitter: "X / Twitter",
+  uploaded_data: "当前上传数据",
   "Continue": "继续放大",
   "Reduce-Pause": "减少投入",
   "Validate Next Week": "下周验证"
@@ -87,7 +100,7 @@ async function parseApiResponse(res) {
 
 async function apiPost(path, body) {
   const key = `${path}:${JSON.stringify(body || {})}`;
-  const noCache = path.includes("/api/v4/chat");
+  const noCache = path.includes("/api/v4/chat") || path.includes("/api/data-agent/query");
   if (!noCache && cache.has(key)) return cache.get(key);
   const promise = fetch(path, {
     method: "POST",
@@ -102,6 +115,13 @@ async function apiPost(path, body) {
   return promise;
 }
 
+async function apiGet(path) {
+  const res = await fetch(path);
+  const data = await parseApiResponse(res);
+  if (!res.ok) throw new Error(data.error || API_UNAVAILABLE);
+  return data;
+}
+
 function Trace({ trace }) {
   useEffect(() => {
     if (trace?.length) {
@@ -111,16 +131,7 @@ function Trace({ trace }) {
   return null;
 }
 
-function prefetchAnalysis(datasetId, questionId) {
-  if (!datasetId) return;
-  apiPost("/api/diagnose", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
-  apiPost("/api/decision", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
-  apiPost("/api/full-agent", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
-  apiPost("/api/v3-agent", { dataset_id: datasetId, task: "评估内容策略增量，生成可验证的下一步行动。" }).catch(() => {});
-  apiPost("/api/action-plan", { dataset_id: datasetId, question_id: questionId }).catch(() => {});
-}
-
-function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact = false }) {
+function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, workspaceId, onUploaded, compact = false }) {
   const inputRef = useRef(null);
   const [files, setFiles] = useState([]);
   const [text, setText] = useState("");
@@ -135,6 +146,7 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact
     const form = new FormData();
     selected.forEach((file) => form.append("files", file));
     form.append("text", text);
+    form.append("workspace_id", workspaceId);
     try {
       const res = await fetch("/api/upload", { method: "POST", body: form });
       const data = await parseApiResponse(res);
@@ -142,9 +154,9 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact
       setDatasetId(data.dataset_id);
       setMapping(data.mapping);
       setTasks(data.tasks || []);
+      onUploaded?.(data.dataset);
       cache.clear();
       setNotice("资料已进入分析区，可以直接开始提问。");
-      prefetchAnalysis(data.dataset_id, "pain_point_title");
       setTimeout(() => setPage?.("chat"), 240);
     } catch (error) {
       setNotice(error.message);
@@ -195,7 +207,7 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact
       </div>
 
       <div className="file-row">
-        {files.length ? files.map((file) => <span key={file.name}>{file.name}</span>) : <span>未上传时默认使用演示数据，方便先看效果。</span>}
+        {files.length ? files.map((file) => <span key={file.name}>{file.name}</span>) : <span>上传后会保存到当前工作区，可随时继续分析。</span>}
       </div>
 
       {tasks.length ? (
@@ -214,11 +226,205 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, compact
   );
 }
 
-function ChatPage({ datasetId, setDatasetId, setMapping, setPage }) {
+const operationLabels = {
+  retrieve_memory: "检索上下文",
+  compile_task: "编译任务",
+  plan_steps: "生成计划",
+  execute_analysis: "执行分析",
+  validate_artifacts: "校验结果",
+  compose_response: "生成回答",
+  clarify: "澄清问题",
+  LoadDataset: "读取数据",
+  ProfileSchema: "检查字段",
+  ResolveEntities: "匹配业务含义",
+  JoinTables: "连接数据表",
+  CreateMetric: "计算指标",
+  Describe: "比较数据",
+  CausalReadiness: "检查分析条件",
+  Bootstrap: "评估稳定性",
+  Regression: "调整影响因素",
+  ValidateClaim: "核对结论",
+  GenerateReport: "整理回答",
+  SchemaSkill: "识别数据结构",
+  DataQualitySkill: "检查数据质量",
+  AutoInsightsSkill: "扫描数据洞察",
+  DescriptiveComparisonSkill: "计算分组结果",
+  KGConstructionSkill: "构建关系证据",
+  CausalDiscoverySkill: "生成候选关系",
+  CausalReadinessSkill: "检查分析条件",
+  BootstrapSkill: "计算稳定区间",
+  RegressionSkill: "调整影响因素",
+  DIDSkill: "估计前后差异",
+  CounterfactualSkill: "模拟策略变化",
+  ReportSkill: "整理结果"
+};
+
+const liveStages = [
+  { label: "理解问题", detail: "识别目标、指标和比较对象" },
+  { label: "匹配数据", detail: "定位数据表、字段与历史状态" },
+  { label: "执行分析", detail: "运行真实的数据与统计技能" },
+  { label: "检查结果", detail: "重算关键指标并限制结论强度" },
+  { label: "保存状态", detail: "记录产物血缘，支持继续追问" }
+];
+
+function evidenceLabel(level) {
+  const labels = {
+    descriptive_pattern: "直接观察",
+    adjusted_association: "调整后关联",
+    exploratory_causal_hypothesis: "待验证假设",
+    quasi_causal_estimate: "准实验估计",
+    experimental_evidence: "实验结果"
+  };
+  const numericLevels = {
+    1: "直接观察",
+    2: "调整后关联",
+    3: "待验证假设",
+    4: "准实验估计",
+    5: "实验结果"
+  };
+  return labels[level] || numericLevels[level] || "已核对结果";
+}
+
+function ResultArtifact({ message }) {
+  const artifact = message.artifact || {};
+  const run = message.run || {};
+  const resultView = run.result_view || {};
+  const actions = artifact.action_cards || artifact.actions || [];
+  const validation = run.validation_report || message.validation || {};
+  const state = run.analytical_state_summary || {};
+  if (!actions.length && !run.state_id && !resultView.rows?.length) return null;
+  return (
+    <div className="answer-artifacts">
+      {resultView.rows?.length ? (
+        <div className="result-view">
+          <div className="result-view-head"><strong>{resultView.title}</strong><span>{resultView.rows.length} 项结果</span></div>
+          <div className="result-view-grid">
+            <div className="result-table-wrap">
+              <table className="result-table">
+                <thead><tr>{resultView.columns.map((column) => <th key={column}>{resultView.column_labels?.[column] || column}</th>)}</tr></thead>
+                <tbody>{resultView.rows.slice(0, 8).map((row, index) => (
+                  <tr key={`${row.name || row.metric || "row"}-${index}`}>{resultView.columns.map((column) => <td key={column}>{row[column] ?? "-"}</td>)}</tr>
+                ))}</tbody>
+              </table>
+            </div>
+            {resultView.chart ? <Suspense fallback={<div className="chart-loading"><Loader2 className="spin" size={18} />正在绘制</div>}><ResultChart chart={resultView.chart} /></Suspense> : null}
+          </div>
+        </div>
+      ) : null}
+      {actions.length ? (
+        <div className="answer-actions">
+          {actions.slice(0, 3).map((card, index) => (
+            <div className="answer-action" key={`${card.title || card.action}-${index}`}>
+              <span>{index + 1}</span>
+              <div>
+                <strong>{cn(card.recommendation || card.title || card.action)}</strong>
+                <small>{card.next_step || card.explanation || card.evidence || "按建议继续记录结果。"}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="answer-proof">
+        <span><ShieldCheck size={14} />{evidenceLabel(run.evidence_level || state.evidence_level)}</span>
+        <span className={validation.valid === false ? "check-bad" : "check-good"}>
+          {validation.valid === false ? "需要复核" : "检查通过"}
+        </span>
+        {run.state_id ? <span>状态 {run.state_id.slice(-8)}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, onRestore }) {
+  const [tab, setTab] = useState("run");
+  const workflow = run?.workflow_summary || {};
+  const state = run?.analytical_state_summary || {};
+  const operations = run?.executed_skills?.length ? run.executed_skills : (workflow.operations || []);
+  const validation = run?.validation_report || workflow.validation || {};
+  const task = run?.task_spec || {};
+
+  if (collapsed) {
+    return (
+      <button className="inspector-restore" type="button" onClick={() => setCollapsed(false)} title="打开分析过程">
+        <PanelRightOpen size={18} />
+      </button>
+    );
+  }
+
+  return (
+    <aside className="run-inspector">
+      <div className="inspector-head">
+        <div>
+          <span>分析过程</span>
+          <strong>{loading ? "正在运行" : run ? "本次分析已完成" : "等待问题"}</strong>
+        </div>
+        <button type="button" onClick={() => setCollapsed(true)} title="收起分析过程"><PanelRightClose size={18} /></button>
+      </div>
+
+      <div className="inspector-tabs" role="tablist">
+        <button className={tab === "run" ? "active" : ""} onClick={() => setTab("run")}>运行</button>
+        <button className={tab === "data" ? "active" : ""} onClick={() => setTab("data")}>数据</button>
+        <button className={tab === "history" ? "active" : ""} onClick={() => setTab("history")}>状态</button>
+      </div>
+
+      {tab === "run" && (
+        <div className="inspector-body">
+          {loading ? liveStages.map((item, index) => (
+            <div className={`run-step ${index < phase ? "done" : index === phase ? "current" : "waiting"}`} key={item.label}>
+              <span className="step-dot">{index < phase ? <Check size={12} /> : index === phase ? <Loader2 className="spin" size={12} /> : <Circle size={9} />}</span>
+              <div><strong>{item.label}</strong><small>{item.detail}</small></div>
+            </div>
+          )) : operations.length ? operations.map((item, index) => (
+            <div className="run-step done" key={`${item}-${index}`}>
+              <span className="step-dot"><Check size={12} /></span>
+              <div><strong>{operationLabels[item] || item}</strong><small>{index === operations.length - 1 ? "回答及分析状态已保存" : "已生成可追溯的中间结果"}</small></div>
+            </div>
+          )) : (
+            <div className="inspector-empty"><Workflow size={25} /><p>提出问题后，这里会显示真实的数据匹配、计算和检查过程。</p></div>
+          )}
+          {run ? (
+            <div className="run-summary">
+              <div><span>结论等级</span><strong>{evidenceLabel(run.evidence_level || state.evidence_level)}</strong></div>
+              <div><span>结果检查</span><strong>{validation.valid === false ? "需要复核" : "通过"}</strong></div>
+              <div><span>本次成本</span><strong>{Number(run.cost_spent || 0).toFixed(2)}</strong></div>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {tab === "data" && (
+        <div className="inspector-body">
+          <div className="scope-block"><span>分析目标</span><strong>{task.objective || task.user_goal || "等待问题"}</strong></div>
+          <div className="scope-block"><span>使用数据</span><strong>{(state.selected_tables || []).map(cn).join("、") || "演示数据"}</strong></div>
+          <div className="scope-block"><span>关键字段</span><div className="field-list">{(state.selected_columns || []).slice(0, 10).map((item) => <code key={item}>{cn(item)}</code>)}</div></div>
+          <div className="scope-block"><span>分析产物</span><strong>{(state.artifacts || []).length} 个</strong></div>
+        </div>
+      )}
+
+      {tab === "history" && (
+        <div className="inspector-body">
+          {history.length ? history.slice().reverse().map((item, index) => (
+            <div className={`state-row ${index === 0 ? "current" : ""}`} key={item.state_id || index}>
+              <History size={15} />
+              <div><strong>{index === 0 ? "当前分析" : `历史分析 ${history.length - index}`}</strong><small>{item.summary || `状态 ${(item.state_id || "").slice(-8)}`}</small></div>
+              {index > 0 && item.state_id ? <button type="button" onClick={() => onRestore(item.state_id)}>恢复</button> : null}
+            </div>
+          )) : <div className="inspector-empty"><History size={25} /><p>每次完成分析后都会保存状态，后续可以继续追问、比较或回退。</p></div>}
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComplete }) {
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [runPhase, setRunPhase] = useState(0);
+  const [latestRun, setLatestRun] = useState(null);
+  const [runHistory, setRunHistory] = useState([]);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
   const [listening, setListening] = useState(false);
   const [voiceTip, setVoiceTip] = useState("");
   const bottomRef = useRef(null);
@@ -237,24 +443,48 @@ function ChatPage({ datasetId, setDatasetId, setMapping, setPage }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  useEffect(() => {
+    if (!loading) return undefined;
+    setRunPhase(0);
+    const timer = window.setInterval(() => setRunPhase((value) => Math.min(value + 1, liveStages.length - 1)), 900);
+    return () => window.clearInterval(timer);
+  }, [loading]);
+
+  useEffect(() => {
+    setSessionId(null);
+    setMessages([]);
+    setLatestRun(null);
+    setRunHistory([]);
+  }, [datasetId]);
+
   async function send(preset) {
     const text = (preset || input).trim();
     if (!text || loading) return;
+    if (!datasetId) {
+      setMessages((prev) => [...prev, { role: "assistant", content: "请先上传或选择一个数据集，再开始分析。", error: true }]);
+      setPage("upload");
+      return;
+    }
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: text }]);
     setLoading(true);
     try {
-      const data = await apiPost("/api/v4/chat", {
+      const data = await apiPost("/api/data-agent/query", {
         session_id: sessionId,
         dataset_id: datasetId,
+        workspace_id: workspaceId,
         message: text
       });
       setSessionId(data.session_id);
+      setLatestRun(data);
+      if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
+      onRunComplete?.(data.run);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply,
         artifact: data.user_artifact,
-        validation: data.validation_report
+        validation: data.validation_report,
+        run: data
       }]);
       speakReply(data.reply);
     } catch (error) {
@@ -271,17 +501,21 @@ function ChatPage({ datasetId, setDatasetId, setMapping, setPage }) {
     setLoading(true);
     setVoiceTip("正在把语音转成经营建议…");
     try {
-      const data = await apiPost("/api/v4/voice/turn", {
+      const data = await apiPost("/api/data-agent/query", {
         session_id: sessionId,
         dataset_id: datasetId,
-        transcript: text,
-        stack: "pipecat"
+        workspace_id: workspaceId,
+        message: text
       });
       setSessionId(data.session_id || sessionId);
+      setLatestRun(data);
+      if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
+      onRunComplete?.(data.run);
       setMessages((prev) => [...prev, {
         role: "assistant",
         content: data.reply,
-        artifact: data.user_artifact
+        artifact: data.user_artifact,
+        run: data
       }]);
       speakReply(data.reply);
     } catch (error) {
@@ -334,78 +568,75 @@ function ChatPage({ datasetId, setDatasetId, setMapping, setPage }) {
   ];
 
   return (
-    <section className="page chat-page">
-      <header className="page-head">
-        <div>
-          <span className="eyebrow">对话分析</span>
-          <h1>经营问题，直接问</h1>
-          <p>先直接提问，再决定要不要补资料。首页只保留对话，把注意力放在“下一步该做什么”。</p>
-        </div>
+    <section className={`page workspace-page ${inspectorCollapsed ? "inspector-hidden" : ""}`}>
+      <header className="workspace-head">
+        <div><span className="workspace-kicker">SoloDeck 数据智能体</span><h1>从数据到答案</h1></div>
+        <div className="workspace-status"><span className={loading ? "busy" : "ready"} />{loading ? "正在分析" : "可以提问"}</div>
       </header>
-      <div className="chat-topbar">
-        <div className="chat-topbar-copy">
-          <strong>{datasetId ? "当前已接入可分析数据" : "当前使用演示数据，可直接开始提问"}</strong>
-          <span>如果需要补充截图、表格或文字，再进入上传页。</span>
-        </div>
-        <button className="primary-btn subtle" type="button" onClick={() => setPage("upload")}>
-          去上传资料
-        </button>
+
+      <div className="data-context">
+        <div className="data-context-main"><Database size={17} /><div><strong>{dataset?.name || (datasetId ? "当前数据已连接" : "尚未连接数据")}</strong><span>{dataset ? `${dataset.row_count} 行 · ${dataset.column_count} 列` : "上传表格、截图或文字后开始分析"}</span></div></div>
+        <div className="data-context-meta"><span><Table2 size={14} />{mapping?.mapped_fields?.length || 0} 个已识别字段</span><span><ShieldCheck size={14} />数据仅用于本次分析</span></div>
+        <button className="icon-text-btn" type="button" onClick={() => setPage("upload")}><FileUp size={16} />添加数据</button>
       </div>
 
-      <div className="chat-starters">
-        {starters.map((item) => (
-          <button key={item} className="chip-btn" type="button" onClick={() => send(item)}>{item}</button>
-        ))}
-      </div>
-
-      <div className="chat-panel">
-        {messages.length === 0 && (
-          <div className="chat-empty">
-            <MessageSquare size={28} />
-            <p>输入你的经营问题，例如标题策略、平台选择或收入变化。分析完成后会给出结论与下一步建议。</p>
-          </div>
-        )}
-        {messages.map((msg, index) => (
-          <article key={index} className={`chat-bubble ${msg.role}${msg.error ? " error" : ""}`}>
-            <span className="chat-role">{msg.role === "user" ? "你" : "SoloDeck"}</span>
-            <p>{msg.content}</p>
-            {msg.artifact?.action_cards?.length ? (
-              <div className="chat-cards">
-                {msg.artifact.action_cards.slice(0, 2).map((card, i) => (
-                  <div key={i} className="mini-card">
-                    <strong>{cn(card.title || card.action)}</strong>
-                    <small>{card.next_step || card.explanation}</small>
-                  </div>
-                ))}
+      <div className="agent-workbench">
+        <div className="conversation-column">
+          <div className="chat-panel">
+            {messages.length === 0 && (
+              <div className="chat-empty workspace-empty">
+                <div className="empty-mark"><Sparkles size={22} /></div>
+                <span className="empty-eyebrow">可执行的数据分析</span>
+                <h2>{datasetId ? "今天想从数据里确认什么？" : "连接数据，然后直接提问"}</h2>
+                <p>{datasetId ? "描述目标即可。系统会定位字段、编排技能、执行计算并核对答案。" : "支持表格、截图和文字。无需整理字段，也不用先选择分析方法。"}</p>
+                <div className="agent-capabilities">
+                  <span><Database size={14} />理解数据</span>
+                  <span><Workflow size={14} />编排步骤</span>
+                  <span><Activity size={14} />执行计算</span>
+                  <span><ShieldCheck size={14} />核对结果</span>
+                </div>
+                {!datasetId ? <button className="connect-data-btn" type="button" onClick={() => setPage("upload")}><FileUp size={16} />连接第一份数据<ArrowRight size={15} /></button> : null}
+                <div className="starter-grid">
+                  {starters.map((item) => <button key={item} type="button" onClick={() => send(item)}><Search size={15} /><span>{item}</span><ArrowRight size={15} /></button>)}
+                </div>
               </div>
-            ) : null}
-          </article>
-        ))}
-        {loading && <div className="chat-loading"><Loader2 className="spin" size={18} /> 正在分析…</div>}
-        <div ref={bottomRef} />
-      </div>
+            )}
+            {messages.map((msg, index) => (
+              <article key={index} className={`chat-bubble ${msg.role}${msg.error ? " error" : ""}`}>
+                <div className="message-avatar">{msg.role === "user" ? "你" : <span className="mini-logo" />}</div>
+                <div className="message-content">
+                  <span className="chat-role">{msg.role === "user" ? "你" : "SoloDeck"}</span>
+                  <p>{msg.content}</p>
+                  {msg.role === "assistant" ? <ResultArtifact message={msg} /> : null}
+                </div>
+              </article>
+            ))}
+            {loading && <div className="chat-loading"><Loader2 className="spin" size={17} /><span>{liveStages[runPhase].label}：{liveStages[runPhase].detail}</span></div>}
+            <div ref={bottomRef} />
+          </div>
 
-      <div className="chat-input-row">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="输入问题，Enter 发送；Shift+Enter 换行"
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <div className="chat-actions">
-          <button className={`voice-btn ${listening ? "active" : ""}`} type="button" onClick={toggleVoice}>
-            {listening ? <MicOff size={16} /> : <Mic size={16} />}
-            <span>{listening ? "停止录音" : "语音提问"}</span>
-          </button>
-          <button className="primary-btn" type="button" disabled={loading} onClick={() => send()}>发送</button>
+          <div className="composer">
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} placeholder="询问数据中的变化、原因、风险或下一步行动…" onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} />
+            <div className="composer-actions">
+              <div>
+                <button className="composer-icon" type="button" onClick={() => setPage("upload")} title="添加数据"><FileUp size={18} /></button>
+                <button className={`composer-icon ${listening ? "active" : ""}`} type="button" onClick={toggleVoice} title={listening ? "停止录音" : "语音提问"}>{listening ? <MicOff size={18} /> : <Mic size={18} />}</button>
+              </div>
+              <button className="send-btn" type="button" disabled={loading || !input.trim()} onClick={() => send()} title="发送"><Send size={18} /></button>
+            </div>
+          </div>
+          {voiceTip ? <div className="voice-tip">{voiceTip}</div> : null}
         </div>
+        <RunInspector
+          run={latestRun}
+          loading={loading}
+          phase={runPhase}
+          history={runHistory}
+          collapsed={inspectorCollapsed}
+          setCollapsed={setInspectorCollapsed}
+          onRestore={(stateId) => send(`回到 ${stateId}，并告诉我当时的结论`)}
+        />
       </div>
-      {voiceTip ? <div className="voice-tip">{voiceTip}</div> : null}
     </section>
   );
 }
@@ -414,7 +645,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
   return (
     <>
       <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-label="切换侧栏">
-        {collapsed ? "☰" : "×"}
+        {collapsed ? <Menu size={19} /> : <X size={19} />}
       </button>
       <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
         <div className="brand">
@@ -424,7 +655,7 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
             <small>Northstar Labs</small>
           </div>
         </div>
-        <p className="side-copy">把数据变成下一步可执行计划。</p>
+        <p className="side-copy">从问题到证据，再到可执行结论。</p>
         <nav>
           {pages.map((item) => {
             const Icon = item.icon;
@@ -445,23 +676,98 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
   );
 }
 
-function UploadPage({ datasetId, mapping, setDatasetId, setMapping, setPage }) {
+function UploadPage({ datasetId, mapping, setDatasetId, setMapping, setPage, workspaceId, datasets, refreshWorkspace, selectDataset }) {
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  useEffect(() => {
+    if (!datasetId) {
+      setDetail(null);
+      return;
+    }
+    apiGet(`/api/data-agent/datasets/${datasetId}?workspace_id=${encodeURIComponent(workspaceId)}`)
+      .then(setDetail)
+      .catch(() => setDetail(null));
+  }, [datasetId, workspaceId, datasets.length]);
+
+  async function loadDemo() {
+    setDemoLoading(true);
+    try {
+      const data = await apiPost("/api/data-agent/demo", { workspace_id: workspaceId });
+      setDatasetId(data.dataset_id);
+      setMapping(data.mapping);
+      await refreshWorkspace();
+    } finally {
+      setDemoLoading(false);
+    }
+  }
+
   return (
     <section className="page">
       <header className="page-head">
         <div>
-          <span className="eyebrow">上传</span>
-          <h1>补充资料</h1>
-          <p>这里适合一次性补齐更多表格、截图和反馈资料；首页则更适合直接开始提问。</p>
+          <span className="eyebrow">数据资产</span>
+          <h1>数据目录</h1>
+          <p>统一管理表格、截图和文字资料。选择数据集后，工作台会始终基于它回答。</p>
         </div>
+        <button className="primary-btn subtle" type="button" onClick={loadDemo} disabled={demoLoading}>
+          {demoLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}载入演示数据
+        </button>
       </header>
       <DataIntakePanel
         datasetId={datasetId}
         setDatasetId={setDatasetId}
         setMapping={setMapping}
         setPage={setPage}
+        workspaceId={workspaceId}
+        onUploaded={refreshWorkspace}
       />
-      <MappingSummary mapping={mapping} />
+      <div className="catalog-layout">
+        <div className="dataset-list panel">
+          <div className="section-title"><div><span className="eyebrow">已连接</span><h3>{datasets.length} 个数据集</h3></div></div>
+          {datasets.length ? datasets.map((item) => (
+            <button type="button" className={`dataset-row ${datasetId === item.dataset_id ? "active" : ""}`} key={item.dataset_id} onClick={() => selectDataset(item)}>
+              <Database size={18} /><div><strong>{item.name}</strong><span>{item.row_count} 行 · {item.column_count} 列 · {item.source_type}</span></div><ArrowRight size={16} />
+            </button>
+          )) : <div className="catalog-empty"><Database size={24} /><strong>还没有数据</strong><span>上传自己的资料，或显式载入演示数据。</span></div>}
+        </div>
+        <div className="dataset-detail panel">
+          {detail ? <>
+            <div className="section-title"><div><span className="eyebrow">当前数据</span><h3>{detail.name}</h3></div><button className="primary-btn" onClick={() => setPage("chat")}>开始分析</button></div>
+            <div className="profile-strip">
+              <Kpi label="数据行" value={formatNumber(detail.row_count)} />
+              <Kpi label="字段数" value={formatNumber(detail.column_count)} />
+              <Kpi label="完整度" value={percent(detail.profile?.quality_score)} />
+              <Kpi label="重复行" value={formatNumber(detail.profile?.duplicate_rows)} />
+            </div>
+            <div className="field-catalog">
+              {(detail.profile?.columns || []).map((column) => <span key={column}><Table2 size={13} />{cn(column)}</span>)}
+            </div>
+            <p className="privacy-note"><ShieldCheck size={14} />这里只展示字段与质量摘要，不向前端返回原始记录。</p>
+          </> : <div className="catalog-empty"><Table2 size={24} /><strong>选择一个数据集</strong><span>这里会显示字段概况和脱敏预览。</span></div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RunsPage({ runs, datasets, selectDataset, setPage }) {
+  const datasetNames = Object.fromEntries(datasets.map((item) => [item.dataset_id, item.name]));
+  return (
+    <section className="page">
+      <header className="page-head"><div><span className="eyebrow">可追溯执行</span><h1>运行记录</h1><p>每次问题、工具选择、结果视图和耗时都保存在当前工作区。</p></div></header>
+      <div className="runs-list">
+        {runs.length ? runs.map((run) => (
+          <article className="run-card" key={run.run_id}>
+            <div className="run-card-head"><span className={`run-status ${run.status}`}>{run.status === "completed" ? "已完成" : "需复核"}</span><time>{new Date(run.created_at).toLocaleString("zh-CN")}</time></div>
+            <h3>{run.user_task}</h3>
+            <p>{run.reply}</p>
+            <div className="run-meta"><span><Database size={13} />{datasetNames[run.dataset_id] || "历史数据集"}</span><span><Activity size={13} />{Math.round(run.latency_ms)} 毫秒</span></div>
+            <div className="tool-chips">{run.selected_tools.map((tool) => <code key={tool}>{operationLabels[tool] || tool}</code>)}</div>
+            <button type="button" className="text-action" onClick={() => { const item = datasets.find((dataset) => dataset.dataset_id === run.dataset_id); if (item) selectDataset(item); setPage("chat"); }}>基于该数据继续提问 <ArrowRight size={14} /></button>
+          </article>
+        )) : <div className="catalog-empty panel"><History size={26} /><strong>还没有运行记录</strong><span>在数据工作台提出第一个问题后，完整记录会出现在这里。</span></div>}
+      </div>
     </section>
   );
 }
@@ -892,37 +1198,62 @@ function LoadingPage({ title }) {
   return <div className="loading"><Loader2 className="spin" /> {title}</div>;
 }
 
+function EmptyDatasetPage({ setPage }) {
+  return <section className="page empty-dataset-page"><div className="catalog-empty"><Database size={30} /><h2>先连接一份数据</h2><p>上传 CSV、Excel、截图或文字，数据 Agent 才会开始计算。</p><button className="primary-btn" onClick={() => setPage("upload")}>打开数据目录</button></div></section>;
+}
+
 function App() {
   const [page, setPage] = useState("chat");
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth < 760);
+  const [workspaceId] = useState(() => {
+    const saved = window.localStorage.getItem("solodeck_workspace_id");
+    if (saved) return saved;
+    const randomPart = (window.crypto?.randomUUID?.() || "").replaceAll("-", "");
+    const value = `ws_${randomPart || Date.now().toString(36)}`;
+    window.localStorage.setItem("solodeck_workspace_id", value);
+    return value;
+  });
   const [datasetId, setDatasetId] = useState(null);
+  const [datasets, setDatasets] = useState([]);
+  const [runs, setRuns] = useState([]);
   const [mapping, setMapping] = useState(null);
   const [questionId, setQuestionId] = useState("pain_point_title");
   const [, setDiag] = useState(null);
   const [, setDecision] = useState(null);
 
-  useEffect(() => {
-    fetch("/api/demo").then((r) => r.json()).then((data) => {
-      setDatasetId(data.dataset_id);
-      setMapping(data.mapping);
-      prefetchAnalysis(data.dataset_id, questionId);
-    });
-  }, []);
+  async function refreshWorkspace() {
+    const data = await apiGet(`/api/data-agent/workspace?workspace_id=${encodeURIComponent(workspaceId)}`);
+    setDatasets(data.datasets || []);
+    setRuns(data.runs || []);
+    if (!datasetId && data.datasets?.length) {
+      setDatasetId(data.datasets[0].dataset_id);
+      setMapping(data.datasets[0].mapping || null);
+    }
+    return data;
+  }
 
-  useEffect(() => {
-    prefetchAnalysis(datasetId, questionId);
-  }, [datasetId, questionId]);
+  function selectDataset(dataset) {
+    setDatasetId(dataset.dataset_id);
+    setMapping(dataset.mapping || null);
+  }
+
+  useEffect(() => { refreshWorkspace().catch(() => {}); }, [workspaceId]);
+
+  const currentDataset = datasets.find((item) => item.dataset_id === datasetId) || null;
+  const needsData = !datasetId && !["upload", "runs", "chat"].includes(page);
 
   return (
     <div className="shell">
       <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
       <main className={collapsed ? "expanded" : ""}>
-        {page === "upload" && <UploadPage datasetId={datasetId} mapping={mapping} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
-        {page === "chat" && <ChatPage datasetId={datasetId} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} />}
-        {page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
-        {page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
-        {page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}
-        {page === "actions" && <ActionPage datasetId={datasetId} questionId={questionId} />}
+        {page === "upload" && <UploadPage datasetId={datasetId} mapping={mapping} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} workspaceId={workspaceId} datasets={datasets} refreshWorkspace={refreshWorkspace} selectDataset={selectDataset} />}
+        {page === "runs" && <RunsPage runs={runs} datasets={datasets} selectDataset={selectDataset} setPage={setPage} />}
+        {page === "chat" && <ChatPage datasetId={datasetId} dataset={currentDataset} mapping={mapping} setPage={setPage} workspaceId={workspaceId} onRunComplete={() => refreshWorkspace().catch(() => {})} />}
+        {needsData && <EmptyDatasetPage setPage={setPage} />}
+        {!needsData && page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
+        {!needsData && page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
+        {!needsData && page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}
+        {!needsData && page === "actions" && <ActionPage datasetId={datasetId} questionId={questionId} />}
       </main>
     </div>
   );

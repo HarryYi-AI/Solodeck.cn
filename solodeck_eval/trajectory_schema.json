@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solodeck.cn/schemas/trajectory-step-v1.json",
+  "title": "SoloDeck Trajectory Step",
+  "type": "object",
+  "required": [
+    "task_id", "step_id", "timestamp", "state_context_summary",
+    "available_tools", "selected_tool", "arguments", "observation",
+    "execution_status", "latency_ms", "token_usage",
+    "intermediate_reward", "final_reward"
+  ],
+  "properties": {
+    "task_id": {"type": "string"},
+    "step_id": {"type": "string"},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "state_context_summary": {"type": "object"},
+    "available_tools": {"type": "array", "items": {"type": "string"}},
+    "selected_tool": {"type": "string"},
+    "arguments": {"type": "object"},
+    "observation": {"type": "object"},
+    "execution_status": {"enum": ["ok", "warning", "error", "skipped"]},
+    "latency_ms": {"type": "number", "minimum": 0},
+    "token_usage": {
+      "type": "object",
+      "required": ["prompt_tokens", "completion_tokens", "total_tokens", "measured"]
+    },
+    "intermediate_reward": {"type": "number"},
+    "final_reward": {"type": ["number", "null"]},
+    "metadata": {"type": "object"}
+  }
+}

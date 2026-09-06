@@ -267,6 +267,38 @@ def _descriptive_action_cards(comparison: dict[str, Any]) -> list[dict[str, Any]
     best = comparison["best"]
     worst = comparison["worst"]
     metric = comparison.get("metric_label", "目标指标")
+    group_label = comparison.get("group_label", "分组")
+    if group_label == "标题风格":
+        return [
+            {
+                "title": f"优先使用{best['group']}标题",
+                "action": f"下一批同类内容优先采用{best['group']}写法，并继续记录每条内容的{metric}。",
+                "priority": "采用",
+                "evidence": f"当前数据中，{best['group']}的平均{metric}排名第一。",
+            },
+            {
+                "title": "保留内容口径",
+                "action": "比较标题时沿用相近主题和内容体量，避免把题材差异混进标题结果。",
+                "priority": "记录",
+                "evidence": "统一记录口径可以让后续排名更有参考价值。",
+            },
+        ]
+    if group_label in {"内容", "产品"}:
+        return [
+            {
+                "title": f"复盘高{metric}{group_label}",
+                "action": f"先检查“{best['group']}”的主题、入口和发布时间，提炼一个可复用变量，不要整条照搬。",
+                "priority": "复盘",
+                "evidence": f"当前上传数据中，该{group_label}的{metric}合计最高。",
+            },
+            {
+                "title": "核对收入归属",
+                "action": "确认同一内容的收入是否被多条记录重复归集，并补充成本后再比较净收益。",
+                "priority": "核对",
+                "evidence": "当前排名使用数据中的收入合计，尚未扣除成本或重复归属。",
+            },
+        ]
+    second_action = "补充成本、退款和订单来源，比较净收益而不只看收入。" if comparison.get("metric") == "revenue" else "补充曝光、点击、下单和支付数据，定位损失发生在哪一步。"
     return [
         {
             "title": f"保持 {best['group']} 的有效做法",
@@ -276,7 +308,7 @@ def _descriptive_action_cards(comparison: dict[str, Any]) -> list[dict[str, Any]
         },
         {
             "title": f"排查 {worst['group']} 的转化漏斗",
-            "action": "补充曝光、点击、下单和支付数据，定位损失发生在哪一步。",
+            "action": second_action,
             "priority": "排查",
             "evidence": f"当前上传数据中，{worst['group']} 的 {metric} 排名末位。",
         },

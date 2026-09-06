@@ -4,6 +4,7 @@ from typing import Any
 
 from solodeck_v3.skills.base import SkillOutput
 from solodeck_v3.skills.bootstrap_skill import BootstrapSkill
+from solodeck_v3.skills.auto_insights_skill import AutoInsightsSkill
 from solodeck_v3.skills.causal_discovery_skill import CausalDiscoverySkill
 from solodeck_v3.skills.causal_readiness_skill import CausalReadinessSkill
 from solodeck_v3.skills.counterfactual_skill import CounterfactualSkill
@@ -18,6 +19,7 @@ from solodeck_v3.skills.schema_skill import SchemaSkill
 
 SKILL_REGISTRY = {
     "SchemaSkill": SchemaSkill,
+    "AutoInsightsSkill": AutoInsightsSkill,
     "DataQualitySkill": DataQualitySkill,
     "DescriptiveComparisonSkill": DescriptiveComparisonSkill,
     "DIDSkill": DIDSkill,
@@ -47,8 +49,12 @@ def execute_skill_sequence(state: dict[str, Any], skills: list[str]) -> dict[str
             "skill_version": manifest["version"], "validator_id": "skill_output_validator",
             "dataset_version": state.get("dataset_version", state.get("trace_id")),
         }
-        if artifact["id"] not in {a.get("id") for a in state.setdefault("artifacts", [])}:
-            state["artifacts"].append(artifact)
+        artifacts = state.setdefault("artifacts", [])
+        existing = next((index for index, item in enumerate(artifacts) if item.get("id") == artifact["id"]), None)
+        if existing is None:
+            artifacts.append(artifact)
+        else:
+            artifacts[existing] = artifact
         outputs.append(artifact)
         state.setdefault("selected_skills", []).append(skill_name)
         state.setdefault("skill_manifests", {})[skill_name] = manifest

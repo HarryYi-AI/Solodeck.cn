@@ -1,0 +1,522 @@
+[
+  {
+    "task_id": "business_scm_001",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.5,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_002",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.65,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_003",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.8,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_004",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.95,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_005",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.1,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_006",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.25,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_007",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.4,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_008",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.55,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_009",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.7,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_010",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.8499999999999999,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_011",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.5,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_012",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.65,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_013",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.8,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_014",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 0.95,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_015",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.1,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_016",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.25,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_017",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.4,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_018",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.55,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_019",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.7,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  },
+  {
+    "task_id": "business_scm_020",
+    "dag": [
+      [
+        "Z",
+        "T"
+      ],
+      [
+        "Z",
+        "Y"
+      ],
+      [
+        "T",
+        "Y"
+      ]
+    ],
+    "treatment": "T",
+    "outcome": "Y",
+    "confounders": [
+      "Z"
+    ],
+    "true_ate": 1.8499999999999999,
+    "hidden_confounding": false,
+    "noise_level": 0.65,
+    "sample_size": 600
+  }
+]

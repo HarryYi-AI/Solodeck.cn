@@ -125,3 +125,18 @@ def test_natural_language_rollback_uses_persisted_state_ids() -> None:
         assert result is not None
         assert result["analytical_state"]["filters"] == []
         assert "filters" in result["state_diff"]
+
+
+def test_explicit_state_id_stops_before_chinese_punctuation() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        store = StateStore(_repo(tmp))
+        first = store.snapshot(AnalysisState("p", "s", "t1", {"d": "v1"}, filters=[]))
+        second = store.branch(first.state_id, "main", filters=[{"column": "revenue", "op": ">", "value": 0}])
+        session = {
+            "last_state_id": second.state_id,
+            "state_history": [{"state_id": first.state_id}, {"state_id": second.state_id}],
+        }
+        result = execute_state_command(f"回到 {first.state_id}，并告诉我当时的结论", session, store)
+        assert result is not None
+        assert result["analytical_state"]["filters"] == []
+        assert "filters" in result["state_diff"]

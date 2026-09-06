@@ -46,6 +46,27 @@ def test_causal_wording_still_uses_causal_path() -> None:
     assert risk["high_risk"] is True
 
 
+def test_plain_title_strategy_comparison_stays_descriptive() -> None:
+    df = pd.DataFrame({
+        "content_id": ["a", "b", "c", "d", "e", "f"],
+        "platform": ["xiaohongshu"] * 4 + ["douyin"] * 2,
+        "title_style": ["pain_point", "pain_point", "tutorial", "tutorial", "pain_point", "tutorial"],
+        "consultations": [20, 10, 5, 5, 1000, 2000],
+    })
+    message = "小红书痛点标题是不是比教程标题更能带来咨询？"
+    spec = compile_with_session(message, df)
+    risk = assess_risk(message, spec.to_dict(), {}, {"ready": True})
+    output = DescriptiveComparisonSkill().run({"df": df, "task_spec": spec.to_dict(), "message": message})
+
+    assert spec.task_type == "descriptive_analysis"
+    assert risk["high_risk"] is False
+    assert [row["group"] for row in output.content["ranking"]] == ["痛点型", "教程型"]
+    assert output.content["ranking"][0]["value"] == 15
+    assert output.content["aggregation"] == "平均值"
+    assert output.content["sample_size"] == 4
+    assert output.content["scope"] == {"platform": "小红书"}
+
+
 def test_descriptive_skill_ranks_and_computes_ratio() -> None:
     df = platform_data()
     spec = compile_user_goal("哪个平台转化更好？", df).to_dict()

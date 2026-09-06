@@ -8,6 +8,17 @@ class ReportSkill(BaseSkill):
     role = "Report"
 
     def run(self, state: dict) -> SkillOutput:
+        quality = next((a for a in state.get("artifacts", []) if a.get("id") == "data_quality_report"), {}).get("content", {})
+        task_type = (state.get("task_spec") or {}).get("task_type")
+        if task_type == "data_quality_repair" and quality:
+            report = self._quality_report(state, quality)
+            state["final_report"] = report
+            return SkillOutput("final_report", "report", report)
+        insights = next((a for a in state.get("artifacts", []) if a.get("id") == "auto_insights"), {}).get("content", {})
+        if insights:
+            report = self._insight_report(state, insights)
+            state["final_report"] = report
+            return SkillOutput("final_report", "report", report)
         descriptive = next((a for a in state.get("artifacts", []) if a.get("id") == "descriptive_comparison"), {}).get("content", {})
         if descriptive and descriptive.get("question_type") == "descriptive_comparison":
             report = self._descriptive_report(state, descriptive)
@@ -44,7 +55,11 @@ class ReportSkill(BaseSkill):
     def _descriptive_report(state: dict, comparison: dict) -> dict:
         scale = float(comparison.get("display_scale", 1.0))
         metric_label = comparison.get("metric_label", "指标")
+        if comparison.get("aggregation") == "平均值" and not metric_label.startswith("平均"):
+            metric_label = f"平均{metric_label}"
         ranking = comparison["ranking"]
+        scope = comparison.get("scope") or {}
+        scope_prefix = f"在{scope['platform']}数据中，" if scope.get("platform") else ""
 
         def display(row: dict) -> str:
             value = float(row["value"]) * scale
@@ -87,15 +102,48 @@ class ReportSkill(BaseSkill):
                 "limitation": "相同值可能是真实持平，也可能来自全零或缺失数据；请先核对分母与统计周期。",
                 "data_source": f"用户上传数据，共 {comparison.get('sample_size', 0)} 条有效记录。",
             }
-        ranking_text = "、".join(f"{row['group']} {display(row)}" for row in ranking[:6])
+        limit = int(comparison.get("requested_limit") or 6)
+        ranking_text = "、".join(f"{row['group']} {display(row)}" for row in ranking[:limit])
         ratio = comparison.get("best_to_worst_ratio")
         difference = f"，约为{worst['group']}的 {ratio:.1f} 倍" if ratio is not None else ""
-        result = f"【描述性结论】{best['group']}的{metric_label}最高，为 {display(best)}{difference}。排序：{ranking_text}。"
+        result = f"【描述性结论】{scope_prefix}{best['group']}的{metric_label}最高，为 {display(best)}{difference}。排序：{ranking_text}。"
         return {
             "objective": state["task_spec"]["objective"],
             "method": f"按{comparison.get('group_label', '分组')}汇总并直接比较{metric_label}",
             "result": result,
             "confidence": "直接观察",
-            "limitation": "该排序回答当前数据中谁更高；若要判断差异由平台本身还是活动、流量结构等因素造成，再做归因分析。",
+            "limitation": "以上按当前上传记录直接计算；数据更新后，排名会同步变化。",
             "data_source": f"用户上传数据，共 {comparison.get('sample_size', 0)} 条有效记录。",
+        }
+
+    @staticmethod
+    def _quality_report(state: dict, quality: dict) -> dict:
+        missing = quality.get("missing_rate") or {}
+        affected = [(name, value) for name, value in missing.items() if float(value) > 0]
+        affected_text = "、".join(f"{name} {float(value) * 100:.1f}%" for name, value in affected[:5])
+        warnings = quality.get("warnings") or []
+        if affected_text:
+            result = f"共 {quality.get('rows', 0)} 行、{quality.get('columns', 0)} 列。存在缺失的主要字段：{affected_text}。"
+        else:
+            result = f"共 {quality.get('rows', 0)} 行、{quality.get('columns', 0)} 列，主要字段未发现缺失值。"
+        return {
+            "objective": state["task_spec"]["objective"],
+            "method": "字段完整性与缺失率检查",
+            "result": result,
+            "confidence": "直接计算",
+            "limitation": "；".join(warnings[:3]) if warnings else "建议继续核对重复行、异常值和统计口径。",
+            "data_source": "当前工作区数据集。",
+        }
+
+    @staticmethod
+    def _insight_report(state: dict, insights: dict) -> dict:
+        observations = insights.get("observations") or []
+        result = " ".join(f"{index + 1}. {item}" for index, item in enumerate(observations[:3]))
+        return {
+            "objective": state["task_spec"]["objective"],
+            "method": "自动数据剖析与异常扫描",
+            "result": result or "当前数据暂未发现可稳定复述的差异。",
+            "confidence": "直接计算",
+            "limitation": "这些是自动扫描结果，适合定位下一步问题，不代表因果关系。",
+            "data_source": "当前工作区数据集。",
         }
