@@ -9,11 +9,11 @@ import {
 import "./styles.css";
 
 const pages = [
-  { id: "chat", label: "数据工作台", icon: MessageSquare },
-  { id: "upload", label: "数据目录", icon: Database },
-  { id: "runs", label: "运行记录", icon: History },
-  { id: "diagnose", label: "数据质量", icon: BarChart3 },
-  { id: "decision", label: "专业分析", icon: ShieldCheck },
+  { id: "chat", label: "分析工作台", icon: MessageSquare },
+  { id: "upload", label: "数据源", icon: Database },
+  { id: "runs", label: "任务记录", icon: History },
+  { id: "diagnose", label: "质量检查", icon: BarChart3 },
+  { id: "decision", label: "进阶分析", icon: ShieldCheck },
   { id: "agent", label: "关系探索", icon: GitBranch },
   { id: "actions", label: "行动方案", icon: CheckCircle2 }
 ];
@@ -83,7 +83,7 @@ function ciStatus(effect) {
 }
 
 const API_UNAVAILABLE =
-  "分析服务暂不可用：后端 API 未连通。请在服务器启动 FastAPI（8787）和 Cloudflare Tunnel（cloudflared）。";
+  "分析服务暂时繁忙，请稍后重试。";
 
 async function parseApiResponse(res) {
   const raw = await res.text();
@@ -170,7 +170,7 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, workspa
       <div className="intake-head">
         <div>
           <span className="eyebrow">{compact ? "快速接入" : "上传"}</span>
-          <h3>{compact ? "截图、表格、文字都能直接进入分析" : "上传创作者经营数据"}</h3>
+          <h3>{compact ? "截图、表格、文字都能直接进入分析" : "连接需要分析的数据"}</h3>
           <p>支持 CSV / Excel / ZIP / PNG / JPG / WEBP / TXT。截图会自动抽取关键信息，不展示原始明细。</p>
         </div>
         {datasetId ? <div className="dataset-chip">当前数据集已就绪</div> : null}
@@ -339,6 +339,8 @@ function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, o
   const [tab, setTab] = useState("run");
   const workflow = run?.workflow_summary || {};
   const state = run?.analytical_state_summary || {};
+  const agentTrace = run?.data_agent_trace || {};
+  const acquisitionSteps = agentTrace.trace || [];
   const operations = run?.executed_skills?.length ? run.executed_skills : (workflow.operations || []);
   const validation = run?.validation_report || workflow.validation || {};
   const task = run?.task_spec || {};
@@ -374,6 +376,11 @@ function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, o
               <span className="step-dot">{index < phase ? <Check size={12} /> : index === phase ? <Loader2 className="spin" size={12} /> : <Circle size={9} />}</span>
               <div><strong>{item.label}</strong><small>{item.detail}</small></div>
             </div>
+          )) : acquisitionSteps.length ? acquisitionSteps.map((item, index) => (
+            <div className={`run-step ${item.status === "success" ? "done" : "failed"}`} key={item.step_id || index}>
+              <span className="step-dot">{item.status === "success" ? <Check size={12} /> : <X size={12} />}</span>
+              <div><strong>{item.goal}</strong><small>{item.observation} · {Number(item.latency_ms || 0).toFixed(1)} 毫秒</small></div>
+            </div>
           )) : operations.length ? operations.map((item, index) => (
             <div className="run-step done" key={`${item}-${index}`}>
               <span className="step-dot"><Check size={12} /></span>
@@ -387,6 +394,7 @@ function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, o
               <div><span>结论等级</span><strong>{evidenceLabel(run.evidence_level || state.evidence_level)}</strong></div>
               <div><span>结果检查</span><strong>{validation.valid === false ? "需要复核" : "通过"}</strong></div>
               <div><span>本次成本</span><strong>{Number(run.cost_spent || 0).toFixed(2)}</strong></div>
+              <div><span>工具调用</span><strong>{acquisitionSteps.length || operations.length}</strong></div>
             </div>
           ) : null}
         </div>
@@ -394,10 +402,11 @@ function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, o
 
       {tab === "data" && (
         <div className="inspector-body">
-          <div className="scope-block"><span>分析目标</span><strong>{task.objective || task.user_goal || "等待问题"}</strong></div>
+          <div className="scope-block"><span>分析目标</span><strong>{task.objective || task.user_goal || agentTrace.task_spec?.user_goal || "等待问题"}</strong></div>
           <div className="scope-block"><span>使用数据</span><strong>{(state.selected_tables || []).map(cn).join("、") || "演示数据"}</strong></div>
-          <div className="scope-block"><span>关键字段</span><div className="field-list">{(state.selected_columns || []).slice(0, 10).map((item) => <code key={item}>{cn(item)}</code>)}</div></div>
-          <div className="scope-block"><span>分析产物</span><strong>{(state.artifacts || []).length} 个</strong></div>
+          <div className="scope-block"><span>关键字段</span><div className="field-list">{(state.selected_columns?.length ? state.selected_columns : agentTrace.task_spec?.candidate_columns || []).slice(0, 10).map((item) => <code key={item}>{cn(item)}</code>)}</div></div>
+          <div className="scope-block"><span>分析产物</span><strong>{agentTrace.artifact_count ?? (state.artifacts || []).length} 个</strong></div>
+          <div className="scope-block"><span>结果校验</span><strong>{agentTrace.critique?.valid === false ? "发现问题" : "已通过"}</strong></div>
         </div>
       )}
 
@@ -476,6 +485,7 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
         message: text
       });
       setSessionId(data.session_id);
+      window.__SOLODECK_AGENT_RUN__ = data;
       setLatestRun(data);
       if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
       onRunComplete?.(data.run);
@@ -508,6 +518,7 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
         message: text
       });
       setSessionId(data.session_id || sessionId);
+      window.__SOLODECK_AGENT_RUN__ = data;
       setLatestRun(data);
       if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
       onRunComplete?.(data.run);
@@ -570,12 +581,12 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
   return (
     <section className={`page workspace-page ${inspectorCollapsed ? "inspector-hidden" : ""}`}>
       <header className="workspace-head">
-        <div><span className="workspace-kicker">SoloDeck 数据智能体</span><h1>从数据到答案</h1></div>
+        <div><span className="workspace-kicker">有状态 · 可验证 · 可追溯</span><h1>SoloDeck 数据智能体</h1></div>
         <div className="workspace-status"><span className={loading ? "busy" : "ready"} />{loading ? "正在分析" : "可以提问"}</div>
       </header>
 
       <div className="data-context">
-        <div className="data-context-main"><Database size={17} /><div><strong>{dataset?.name || (datasetId ? "当前数据已连接" : "尚未连接数据")}</strong><span>{dataset ? `${dataset.row_count} 行 · ${dataset.column_count} 列` : "上传表格、截图或文字后开始分析"}</span></div></div>
+        <div className="data-context-main"><span className="source-icon"><Database size={17} /></span><div><strong>{dataset?.name || (datasetId ? "当前数据已连接" : "尚未连接数据")}</strong><span>{dataset ? `${dataset.row_count} 行 · ${dataset.column_count} 列` : "上传表格、截图或文字后开始分析"}</span></div></div>
         <div className="data-context-meta"><span><Table2 size={14} />{mapping?.mapped_fields?.length || 0} 个已识别字段</span><span><ShieldCheck size={14} />数据仅用于本次分析</span></div>
         <button className="icon-text-btn" type="button" onClick={() => setPage("upload")}><FileUp size={16} />添加数据</button>
       </div>
@@ -586,14 +597,14 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
             {messages.length === 0 && (
               <div className="chat-empty workspace-empty">
                 <div className="empty-mark"><Sparkles size={22} /></div>
-                <span className="empty-eyebrow">可执行的数据分析</span>
+                <span className="empty-eyebrow">你的数据分析助手</span>
                 <h2>{datasetId ? "今天想从数据里确认什么？" : "连接数据，然后直接提问"}</h2>
                 <p>{datasetId ? "描述目标即可。系统会定位字段、编排技能、执行计算并核对答案。" : "支持表格、截图和文字。无需整理字段，也不用先选择分析方法。"}</p>
-                <div className="agent-capabilities">
-                  <span><Database size={14} />理解数据</span>
-                  <span><Workflow size={14} />编排步骤</span>
-                  <span><Activity size={14} />执行计算</span>
-                  <span><ShieldCheck size={14} />核对结果</span>
+                <div className="agent-capabilities execution-flow">
+                  <span><Database size={14} /><b>发现</b>数据源</span><i><ArrowRight size={12} /></i>
+                  <span><Search size={14} /><b>检查</b>字段</span><i><ArrowRight size={12} /></i>
+                  <span><Activity size={14} /><b>执行</b>计算</span><i><ArrowRight size={12} /></i>
+                  <span><ShieldCheck size={14} /><b>核对</b>结果</span>
                 </div>
                 {!datasetId ? <button className="connect-data-btn" type="button" onClick={() => setPage("upload")}><FileUp size={16} />连接第一份数据<ArrowRight size={15} /></button> : null}
                 <div className="starter-grid">

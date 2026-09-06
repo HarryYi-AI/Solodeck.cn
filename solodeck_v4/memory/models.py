@@ -8,7 +8,7 @@ from uuid import uuid4
 
 MemoryType = Literal[
     "working", "session", "dataset", "schema", "artifact", "graph",
-    "text", "failure", "skill", "evaluation",
+    "text", "episode", "failure", "skill", "evaluation",
 ]
 
 

@@ -33,6 +33,9 @@ from solodeck_v4.runtime.runner import create_session, run_v4_agent
 from solodeck_v4.tools.registry import list_tools
 from solodeck_v4.session.store import get_session
 from solodeck_runtime.workspace import DataWorkspaceRepository
+from solodeck_runtime.data_agent import build_agent_trace
+from solodeck_runtime.sources import DataFrameSourceAdapter
+from solodeck_runtime.tools import DataToolRegistry
 
 
 app = FastAPI(title="SoloDeck Skill API", version="4.0.0")
@@ -602,6 +605,14 @@ async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
         V4_SESSIONS[session_id] = dataset_id
     started = time.perf_counter()
     result = run_v4_agent(message, frame, session_id, text=TEXTS.get(dataset_id, ""))
+    acquisition = build_agent_trace(
+        message,
+        frame,
+        dataset_id,
+        project_id=workspace_id,
+        session_id=session_id,
+    )
+    result["data_agent_trace"] = acquisition
     elapsed_ms = (time.perf_counter() - started) * 1000
     result_view = result.get("result_view") or {}
     run = WORKSPACES.save_run(workspace_id, dataset_id, message, result, result_view, elapsed_ms)
@@ -625,9 +636,27 @@ async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
         "executed_skills": result.get("selected_skills"),
         "analytical_state_summary": _analytical_state_summary(result.get("analytical_state")),
         "workflow_summary": _workflow_summary(result.get("analysis_workflow"), result.get("workflow_validation")),
+        "data_agent_trace": acquisition,
         "run": run,
     }
     return JSONResponse(_json_safe(safe))
+
+
+@app.get("/api/data-agent/tools")
+async def data_agent_tools() -> JSONResponse:
+    """Return lightweight manifests; full schemas are disclosed after selection."""
+    registry = DataToolRegistry(DataFrameSourceAdapter({}))
+    return JSONResponse({"tools": registry.manifests(), "loading": "progressive"})
+
+
+@app.get("/api/data-agent/repair-demos")
+async def data_agent_repair_demos() -> JSONResponse:
+    from solodeck_runtime.repair_demos import silent_join_repair_demo, tool_failure_repair_demo
+
+    return JSONResponse(_json_safe({
+        "tool_failure": tool_failure_repair_demo(),
+        "silent_join_error": silent_join_repair_demo(),
+    }))
 
 
 @app.get("/api/data-agent/runs")

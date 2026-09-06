@@ -4,6 +4,23 @@
 
 中文：SoloDeck 是一个有状态、可验证的数据分析智能体运行时。它把自然语言目标映射到表、字段、实体和历史分析产物，执行真实的 Python/统计技能，并用证据血缘约束最终结论。
 
+面试版主循环已经收敛为：
+
+```text
+discover -> inspect -> search -> read
+-> plan -> execute -> verify -> repair -> remember
+```
+
+统一数据源支持 CSV、Excel、SQLite、TXT/Markdown；结构化数据默认使用 schema、pandas 或只读 SQL，不会先把整张表切块向量化。工具采用渐进式披露：Planner 先看短 manifest，选定后再加载完整参数 Schema。代码导读见 [Interview Data Agent Walkthrough](docs/INTERVIEW_DATA_AGENT_WALKTHROUGH.md)，现状审计见 [Interview Refactor Audit](docs/INTERVIEW_REFACTOR_AUDIT.md)。
+
+### Capability Status
+
+**Implemented**：统一数据源适配、类型化任务和计划、渐进式工具加载、Python/SQL 执行、确定性 Critic、修复演示、分析状态、词法/BM25 检索、情景与失败记忆、JSONL 轨迹、React SPA。
+
+**Experimental**：候选因果发现、知识图谱、SkillOpt-lite、Langfuse、Embedding 检索。
+
+**Future**：学习型 Tool Router、正式 Agent RL、完整官方 DataAgentBench/DS-1000 评测、MCP 外部数据源。项目不声称这些未来项已经完成。
+
 内容经营、收入和实验分析是当前产品场景；因果分析是高级 Skill Pack，而不是系统的全部身份。完整重构说明见 [Stateful and Verifiable Runtime](docs/STATEFUL_VERIFIABLE_RUNTIME.md)。
 
 <img width="1495" height="798" alt="image" src="https://github.com/user-attachments/assets/1092a0cb-7e6a-4f41-a9a3-9560e0cc4729" />

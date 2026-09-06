@@ -71,6 +71,41 @@ class TaskSpec:
 
 
 @dataclass
+class PlanStep:
+    goal: str
+    operation: str
+    source: str | None = None
+    expected_output: str = "observation"
+    step_id: str = field(default_factory=lambda: _id("step"))
+    status: str = "pending"
+    arguments: dict[str, Any] = field(default_factory=dict)
+    observation: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class AgentState:
+    task: TaskSpec
+    plan: list[PlanStep] = field(default_factory=list)
+    current_step: int = 0
+    observations: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
+    critique: dict[str, Any] = field(default_factory=dict)
+    revision_count: int = 0
+    max_revisions: int = 2
+    status: str = "created"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **asdict(self),
+            "task": self.task.to_dict(),
+            "plan": [step.to_dict() for step in self.plan],
+        }
+
+
+@dataclass
 class EvidenceObject:
     project_id: str
     task_id: str

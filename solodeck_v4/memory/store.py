@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import math
+import re
 from abc import ABC, abstractmethod
 from collections import Counter
 from datetime import datetime, timezone
@@ -131,11 +133,23 @@ class UnifiedMemory:
         candidates = self.backend.query(filters, limit=max(limit * 5, 50))
         if not query.strip():
             return candidates[:limit]
-        terms = {term.lower() for term in query.split() if term}
+        terms = set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", query.lower()))
+        now = datetime.now(timezone.utc)
         scored = []
         for item in candidates:
             haystack = f"{item.content_summary} {json.dumps(item.structured_payload, ensure_ascii=False)}".lower()
-            score = sum(1 for term in terms if term in haystack) + item.quality_score
+            document_terms = set(re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", haystack))
+            relevance = len(terms & document_terms) / max(1, len(terms))
+            try:
+                updated = datetime.fromisoformat(item.updated_at.replace("Z", "+00:00"))
+                age_days = max(0.0, (now - updated).total_seconds() / 86400)
+            except (ValueError, TypeError):
+                age_days = 365.0
+            recency = math.exp(-age_days / 30)
+            importance = max(0.0, min(float(item.quality_score), 1.0))
+            # Explicit engineering heuristic: relevance dominates, while recent,
+            # high-quality episodes break ties. These weights are not learned.
+            score = 0.65 * relevance + 0.20 * recency + 0.15 * importance
             scored.append((score, item.updated_at, item))
         return [item for _, _, item in sorted(scored, reverse=True)[:limit]]
 
