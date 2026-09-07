@@ -433,7 +433,9 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
   const [runPhase, setRunPhase] = useState(0);
   const [latestRun, setLatestRun] = useState(null);
   const [runHistory, setRunHistory] = useState([]);
-  const [inspectorCollapsed, setInspectorCollapsed] = useState(false);
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 760
+  );
   const [listening, setListening] = useState(false);
   const [voiceTip, setVoiceTip] = useState("");
   const bottomRef = useRef(null);
@@ -465,6 +467,15 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
     setLatestRun(null);
     setRunHistory([]);
   }, [datasetId]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    const collapseOnMobile = (event) => {
+      if (event.matches) setInspectorCollapsed(true);
+    };
+    media.addEventListener?.("change", collapseOnMobile);
+    return () => media.removeEventListener?.("change", collapseOnMobile);
+  }, []);
 
   async function send(preset) {
     const text = (preset || input).trim();
