@@ -341,6 +341,39 @@ Deploy the SPA and FastAPI service independently. Configure `SOLODECK_API_ORIGIN
 - optional causal-discovery libraries are not required by the lightweight installation
 - screenshot extraction depends on the configured vision model
 
+## Research Positioning
+
+The data-agent taxonomy summarized by [Awesome Data Agents](https://github.com/HKUSTDial/awesome-data-agents) separates agent capability into perception, planning, actions, tools and memory. Under that taxonomy, SoloDeck is best described as a **supervised, verifiable Proto-L3 data-agent runtime**:
+
+- **Perception**: inspects structured files, screenshots, text, schemas and dataset revisions
+- **Planning**: compiles natural-language goals into typed task specifications and bounded Skill plans
+- **Actions**: executes Python, SQL, statistical, causal and reporting operators
+- **Tools**: exposes versioned, validated Skills through a constrained registry
+- **Memory**: maintains conversational state, analytical artifacts and outcome-linked Decision Memory
+
+The project does not claim unrestricted L3 autonomy. Its current tools are registered in advance, strategy candidates require verifier and human approval, and high-impact conclusions remain supervised. This boundary is intentional: SoloDeck focuses on measurable execution correctness and evidence-grounded decisions rather than unconstrained autonomy.
+
+The main research questions explored in this repository are:
+
+1. How can an Agent route descriptive, diagnostic and causal questions without applying the same analysis policy to every request?
+2. How can executable results and user-visible reports be checked against the same artifacts?
+3. How can trajectories, outcomes and temporal business context become governed long-term memory rather than unstructured chat history?
+4. How can a bounded repair loop improve failed analyses without creating uncontrolled cost or endless reflection?
+
+## Related Work and References
+
+These projects and papers provide research context or design inspiration. They are not vendored dependencies, and inclusion here does not imply code reproduction.
+
+- [Awesome Data Agents](https://github.com/HKUSTDial/awesome-data-agents): autonomy-level taxonomy and the perception/planning/action/tool/memory capability framework used to state SoloDeck's scope.
+- [DeepAnalyze](https://github.com/ruc-datalab/DeepAnalyze): end-to-end data-science task execution across heterogeneous data; motivates broader lifecycle evaluation beyond a single table question.
+- [MetaGPT Data Interpreter](https://github.com/FoundationAgents/MetaGPT/tree/main/examples/di): plan-code-execute-reflect workflows and executable tool use; relevant to SoloDeck's Planner, Skill Runtime and bounded repair loop.
+- [Microsoft GraphRAG](https://github.com/microsoft/graphrag): graph-oriented retrieval and global/local evidence organization; relevant to the knowledge-graph retrieval layer, while SoloDeck keeps numerical claims grounded in live data.
+- [SkillOpt](https://github.com/microsoft/SkillOpt): evidence for treating reusable procedures as optimizable Skills; relevant to SoloDeck's trajectory collection and governed strategy-skill candidates.
+- [DataAgentBench](https://github.com/ucbepic/DataAgentBench): executable evaluation of data-agent behavior; motivates task-level success, tool error, latency and cost metrics.
+- [DS-1000](https://github.com/xlang-ai/DS-1000): execution-based evaluation for data-science code; used as a reference for verifiable pandas and NumPy task subsets.
+
+Future comparisons should report executable success rate, numerical consistency, tool-call count, latency, token cost and repair success. They should not rely only on LLM-based answer scoring.
+
 ## Technical Documentation
 
 - [Agent architecture](ARCHITECTURE_AGENT.md)
