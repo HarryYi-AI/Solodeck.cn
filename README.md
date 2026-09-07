@@ -1,560 +1,352 @@
 # SoloDeck
 
-**SoloDeck is a stateful and verifiable Data Agent that grounds natural-language analytical goals to heterogeneous data, compiles executable workflows, actively verifies intermediate results, and preserves analytical state across long-running interactions.**
+**A stateful, verifiable data agent for evidence-grounded business decisions.**
 
-中文：SoloDeck 是一个有状态、可验证的数据分析智能体运行时。它把自然语言目标映射到表、字段、实体和历史分析产物，执行真实的 Python/统计技能，并用证据血缘约束最终结论。
+SoloDeck 面向内容创作者、一人公司和小型经营团队。系统将自然语言分析目标编译为可执行的数据任务，调用结构化查询、Python、统计分析和因果分析 Skill，验证中间产物，并在多轮会话中保存可追溯的分析状态与长期决策记忆。
 
-面试版主循环已经收敛为：
+SoloDeck 的核心定位是 **Memory-Grounded Causal Decision Agent**，不是由大模型直接生成数字的聊天机器人，也不是只展示指标的通用仪表盘。
+
+## Design Principles
+
+- **Live data first**：当前指标必须通过 DataFrame、SQL 或文件查询计算，Memory 不能替代实时数据。
+- **LLM and computation separation**：LLM 用于语义理解、任务规划与表达；数值由 Python Skill 计算。
+- **Verification before reporting**：输出前检查执行状态、数值一致性、统计假设、证据等级和报告引用。
+- **Stateful analysis**：对话、数据版本、分析产物和决策记录分别持久化，支持追问、补充数据和状态恢复。
+- **Causal safety**：明确区分描述性观察、调整后估计和实验性证据。
+- **Traceability**：任务、工具参数、Observation、延迟、Token 使用和过程奖励记录为 JSONL trajectory。
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[User Query] --> C[Task Compiler]
+    C --> R[Router and Planner]
+    R --> D[Live Data Retriever]
+    R --> M[Decision Memory Retriever]
+    D --> X[SQL / Python / Statistics / Causal Skills]
+    M --> F[Evidence Fusion]
+    X --> F
+    F --> V[Verifier and Critic]
+    V -->|pass| W[Report and Action Cards]
+    V -->|repair| R
+    W --> O[Observed Outcome]
+    O --> E[Decision Episode]
+    E --> K[Consolidation]
+    K --> P[Profile / Regime / Strategy Candidate]
+```
+
+Primary runtime loop:
 
 ```text
 discover -> inspect -> search -> read
 -> plan -> execute -> verify -> repair -> remember
 ```
 
-统一数据源支持 CSV、Excel、SQLite、TXT/Markdown；结构化数据默认使用 schema、pandas 或只读 SQL，不会先把整张表切块向量化。工具采用渐进式披露：Planner 先看短 manifest，选定后再加载完整参数 Schema。代码导读见 [Interview Data Agent Walkthrough](docs/INTERVIEW_DATA_AGENT_WALKTHROUGH.md)，现状审计见 [Interview Refactor Audit](docs/INTERVIEW_REFACTOR_AUDIT.md)。
+## Core Capabilities
 
-### Capability Status
+### Data ingestion and discovery
 
-**Implemented**：统一数据源适配、类型化任务和计划、渐进式工具加载、Python/SQL 执行、确定性 Critic、修复演示、分析状态、词法/BM25 检索、情景与失败记忆、JSONL 轨迹、React SPA。
+- CSV, Excel, SQLite, ZIP, screenshots and unstructured text
+- schema inspection, type inference, field mapping and data-quality checks
+- progressive tool disclosure: the Planner reads compact tool manifests before loading full argument schemas
+- account-scoped datasets and versioned incremental uploads
 
-**Experimental**：候选因果发现、知识图谱、SkillOpt-lite、Langfuse、Embedding 检索。
+Structured tables are not embedded and queried as plain text. Numeric questions are grounded in pandas, read-only SQL or explicit statistical functions.
 
-**Future**：学习型 Tool Router、正式 Agent RL、完整官方 DataAgentBench/DS-1000 评测、MCP 外部数据源。项目不声称这些未来项已经完成。
+### Agent orchestration
 
-内容经营、收入和实验分析是当前产品场景；因果分析是高级 Skill Pack，而不是系统的全部身份。完整重构说明见 [Stateful and Verifiable Runtime](docs/STATEFUL_VERIFIABLE_RUNTIME.md)。
+The v4 runtime coordinates four logical roles:
 
-<img width="1495" height="798" alt="image" src="https://github.com/user-attachments/assets/1092a0cb-7e6a-4f41-a9a3-9560e0cc4729" />
-<img width="1419" height="931" alt="image" src="https://github.com/user-attachments/assets/1a0ecda6-09fa-4442-aecd-d6e5a1fd15f1" />
-<img width="1529" height="920" alt="image" src="https://github.com/user-attachments/assets/ba179ed1-0c22-4571-a1d8-6dab9796b157" />
-<img width="1493" height="534" alt="image" src="https://github.com/user-attachments/assets/8f6c8ac1-d855-4424-93b6-e050ee360511" />
+- **Planner**: compiles the goal into a typed `TaskSpec`, selects evidence sources and creates an execution plan.
+- **Executor**: invokes Data, Python, statistics, causal, graph and report Skills.
+- **Critic**: checks tool failures, missing evidence, numerical consistency and unsupported claims; failed runs enter a bounded repair loop.
+- **Reporter**: converts verified artifacts into concise answers and action cards without recalculating metrics.
 
-## Why SoloDeck
+LangGraph is used for graph-based orchestration when available. Node functions retain a deterministic execution path for lightweight environments and unit tests.
 
-Most analytics tools answer:
+### Statistical and causal Skills
 
-> What happened in the data?
+Implemented analysis components include:
 
-SoloDeck focuses on:
+- descriptive aggregation and ranking
+- derived-rate validation
+- paired differences
+- difference in means and relative lift
+- Bootstrap confidence intervals
+- regression adjustment and fixed effects
+- ATE and segmented CATE
+- optional IPTW, DML, DID and causal-discovery adapters
+- placebo, balance and subsample stability checks
 
-> What should I do next, where should I do it, and how can I verify it?
+Candidate causal graphs combine temporal constraints, domain graph constraints and optional discovery backends. They represent hypotheses for validation, not automatic causal proof.
 
-Creators and solo businesses often have useful data scattered across platform dashboards, spreadsheets, payment screenshots, feedback notes, and campaign records. SoloDeck helps them move from fragmented data to concrete operating decisions.
+### Knowledge and retrieval
 
-## Verifiable Data Analysis Agent Runtime
+Retrieval is query-conditioned rather than a universal vector top-k call:
 
-SoloDeck has evolved from a dashboard-style prototype into a verifiable data analysis Agent runtime:
+- schema retrieval for field and metric questions
+- artifact retrieval for prior computed results
+- session retrieval for references such as “继续看刚才的结果”
+- knowledge-graph retrieval for entity relationships
+- text retrieval for feedback and notes
+- decision-memory retrieval for historical strategies, outcomes and business regimes
+
+The retrieval layer can use lexical, context and optional embedding signals. Exact platform, topic, content format, metric and time constraints remain first-class filters.
+
+## Hierarchical Temporal Decision Memory
+
+Long-term Decision Memory stores what was decided, under which business conditions, from which evidence, and what happened afterward.
 
 ```text
-User data
--> typed task compiler
--> memory and knowledge graph context
--> hypothesis tree
--> method planner
--> executable Python skills
--> artifact/statistical/causal/privacy validation
--> repair loop
--> process reward
--> user-facing action cards
+Decision Episode
+  -> Atomic Facts
+  -> Strategy Evidence
+  -> Consolidation
+  -> Creator Profile / Business Regime
+  -> Strategy Skill Candidate
 ```
 
-The default user interface is a conversation-first analysis workbench: connect data, ask a question, inspect the computed evidence, and continue asking within the same analytical thread. The technical layer is available in the execution inspector for review, but it is not exposed as raw JSON to users.
+Memory types:
 
-### Accounts, Workspaces, and Conversation Memory
+- `DecisionEpisode`: decision context, source data, metrics, methods, recommendation and outcome
+- `DecisionFact`: precisely queryable facts with validity intervals and source lineage
+- `BusinessRegime`: time-bounded business patterns; a new active regime historizes the prior one
+- `CreatorProfile`: evidence-aggregated strengths, effective formats/topics and weak-evidence areas
+- `StrategyEvidence`: before/after metrics, outcome and causal evidence level
+- `StrategySkillCandidate`: repeated patterns awaiting verification and human approval
+- `MemoryQueryPlan`: selects profile, regime, similar episodes, strategy evidence and required live-data fields
+- `DecisionMemoryContext`: a retrieval artifact consumed by the analysis Agent, never a final answer
 
-The product data model is `user -> workspace -> datasets -> threads -> messages/runs`.
-
-- Login sessions use random opaque tokens stored as hashes in SQLite and sent through `HttpOnly`, `SameSite=Lax` cookies.
-- The API derives the workspace from the authenticated user; a client-provided workspace ID cannot override it.
-- A newly registered user starts with an empty workspace. Demo data is loaded only after the user explicitly requests it.
-- Every analysis thread keeps its dataset and v4 Agent `session_id`, so follow-up questions reuse the prior task context after a refresh or on another device.
-- The sidebar stores conversation history; the task-record page keeps lower-level execution history. These are separate on purpose.
-- Persisted assistant messages contain display-safe artifacts and validation summaries, not raw uploaded rows.
-
-Anonymous use remains available for evaluation. Its workspace identifier is stored in the current browser, so cross-device history requires an account.
-
-Research ideas used in the runtime:
-
-- DataMind / Scaling Generalist Data-Analytic Agents: task taxonomy, easy-to-hard data-agent workflows, stable code-based multi-turn rollout.
-- JanusCoder: visual-programmatic traceability, so visual output remains tied to executable logic.
-- Memory failure studies: explicit dataset, graph, trace, failure, and skill-utility memory to reduce stale or contradictory agent memory.
-- Binary-matrix test-case evaluation: SoloDeckBench-lite treats failures as diagnostic patterns, not just pass/fail demos.
-- Graph structure-semantic evolution: the knowledge graph is treated as evolving operating memory across content, product, feedback, and experiment domains.
-
-References:
-
-- https://arxiv.org/abs/2509.25084
-- https://arxiv.org/abs/2510.23538
-- https://arxiv.org/abs/2510.08720
-- https://arxiv.org/abs/2602.10506
-- https://sites.google.com/view/memagent-iclr26/schedule
-
-## What It Solves
-
-- Content creators know which posts performed well, but not whether the title, platform, topic, timing, or account size caused the difference.
-- Solo businesses often miss receivables, invoices, campaign reports, and follow-up tasks.
-- Small product teams need to know whether a new feature, product variant, or beta-test result is worth scaling.
-- Users want actions, not a wall of dashboards.
-
-SoloDeck turns uploaded materials into:
-
-- short-term and long-term task lists
-- weekly validation plans
-- revenue and campaign risk alerts
-- content and platform strategy suggestions
-- product and feedback priorities
-- downloadable operating reports
-
-## Core Features
-
-### 1. Multi-Source Data Intake
-
-SoloDeck supports:
-
-- CSV files
-- screenshots
-- manual text input
-- content performance data
-- revenue records
-- campaign records
-- product data
-- user feedback
-- beta-test records
-- experiment records
-
-It does not require WeChat APIs or real platform APIs, so it is easy to demo and practical for real-world use.
-
-### 2. Action-First Workspace
-
-The default screen is intentionally simple:
-
-1. Choose platforms
-2. Add materials
-3. Read the next actions
-
-Metrics, charts, and detailed analysis are folded by default. Users first see the most important actions instead of long tables.
-
-### 3. Creator and Content Strategy
-
-SoloDeck analyzes:
-
-- title styles
-- topics
-- platforms
-- publishing time
-- content series
-- content fatigue
-- duplication risk
-- commercial value per content
-
-It suggests what to publish next and how to validate the strategy.
-
-### 4. Revenue and Business Workflow
-
-SoloDeck identifies:
-
-- revenue mix
-- platform revenue
-- pending payments
-- high-value clients
-- sponsorship risks
-- missing reports
-- invoice/payment issues
-
-It also supports pricing suggestions and brand report generation.
-
-### 5. Product and Feedback Analysis
-
-SoloDeck also works beyond self-media scenarios. It supports small e-commerce teams, robot products, knowledge products, and productized services.
-
-It analyzes:
-
-- product variants
-- feature tags
-- new vs old versions
-- refunds
-- ratings
-- beta-test results
-- feedback themes
-- roadmap priorities
-
-### 6. Causal-Aware Analysis
-
-SoloDeck does not treat correlation as guaranteed causality.
-
-It separates:
-
-- correlation findings
-- controlled lift estimates
-- paired comparisons
-- experiment results
-- validation plans
-
-The system can control for factors such as:
-
-- account ID
-- platform
-- topic
-- follower base
-- production hours
-- ad spend
-- content type
-
-Supported statistical ideas include:
-
-- group mean comparison
-- ATE estimation from treatment/control groups
-- paired differences for same-content cross-platform analysis
-- fixed-effect style controls
-- propensity-score matching fallback
-- inverse-probability weighting fallback
-- bootstrap confidence intervals
-- placebo-style refutation checks
-- subsample stability checks
-
-The output is cautious: if evidence is weak, SoloDeck recommends a small validation experiment instead of directly scaling the strategy.
-
-### 7. Workflow Trace, Knowledge Base, and Feedback Learning
-
-SoloDeck includes a lightweight workflow layer:
+Episode retrieval uses a transparent ranking function:
 
 ```text
-Data intake -> Revenue analysis -> Strategy analysis -> Lift estimation -> Experiment planning -> Action generation
+score = 0.35 * semantic_similarity
+      + 0.30 * context_match
+      + 0.15 * recency
+      + 0.20 * outcome_relevance
 ```
 
-It also includes:
+Context matching considers platform, topic, account stage, content format and metric. Embeddings are optional and never the only retrieval key.
 
-- a small operating knowledge base for content, e-commerce, product tests, and campaign follow-up
-- TF-IDF retrieval to explain why a recommendation is relevant
-- preference feedback so users can mark recommendations as useful or not useful
-- a lightweight bandit-style ranking adjustment for future suggestions
+### Evidence governance
 
-## Demo Upload Pack
-
-A ready-to-use demo pack is included:
+Decision evidence has three levels:
 
 ```text
-solo_creator_agent/demo_upload_pack/
+observational -> adjusted -> experimental
 ```
 
-It contains virtual screenshots and CSV files that can be uploaded during a live demo:
+Repeated observational success may create a strategy candidate, but it cannot produce causal wording. Promotion into the executable Skill library requires sufficient evidence, verifier approval and human approval.
 
-- operating dashboard screenshot
-- pending payment screenshot
-- feedback notes screenshot
-- campaign tracker screenshot
-- content CSV
-- revenue CSV
-- campaign CSV
-- product CSV
-- feedback CSV
-- experiment CSV
-- beta-test CSV
+### Storage schema
 
-Zip file:
+The first storage backend is SQLite behind a storage interface designed for PostgreSQL-compatible migration. It creates:
 
 ```text
-solo_creator_agent/solodeck_demo_upload_pack.zip
+decision_episodes
+decision_facts
+business_regimes
+creator_profiles
+strategy_evidence
+strategy_skill_candidates
 ```
 
-Suggested demo flow:
+Indexes cover project, timestamp, platform, topic, content format, status and validity periods. Account workspaces provide the project isolation boundary.
 
-1. Open SoloDeck.
-2. Upload screenshots first to show that the product can work without platform APIs.
-3. Paste a manual note, for example:
+## Conversation and Account Model
 
 ```text
-Tomorrow at 9 AM I need to review robot campaign data with the client, but the report is not ready.
+user -> workspace -> datasets -> conversation threads -> messages and runs
 ```
 
-4. Upload CSV files to show full analysis.
-5. Show "Next Actions", "What to Validate This Week", "How SoloDeck Reached These Actions", and the downloadable report.
+- opaque session tokens are hashed in the authentication database
+- browser sessions use `HttpOnly` and `SameSite=Lax` cookies
+- authenticated workspace IDs are derived on the server and cannot be overridden by request payloads
+- new accounts start with empty workspaces
+- one conversation can receive multiple data revisions while retaining its semantic history
+- new data invalidates computed artifact caches before the next analysis
+- persisted assistant messages contain display-safe artifacts rather than raw uploaded rows
 
-## Project Structure
+Anonymous local workspaces remain available. Cross-device history requires an account.
+
+## Repository Layout
 
 ```text
-.
-├── solo_creator_agent/
-│   ├── app.py
-│   ├── requirements.txt
-│   ├── src/
-│   │   ├── agent_orchestrator.py
-│   │   ├── auto_insights.py
-│   │   ├── business_collab.py
-│   │   ├── causal_estimator.py
-│   │   ├── causal_experiment.py
-│   │   ├── causal_refute.py
-│   │   ├── data_loader.py
-│   │   ├── knowledge_base.py
-│   │   ├── llm_agent.py
-│   │   ├── product_feedback.py
-│   │   ├── recommendation_learning.py
-│   │   ├── revenue_analysis.py
-│   │   ├── strategy_analysis.py
-│   │   ├── text_structured.py
-│   │   ├── user_storage.py
-│   │   └── workflow_engine.py
-│   ├── data/
-│   ├── demo_upload_pack/
-│   ├── scripts/
-│   ├── deploy/
-│   ├── Dockerfile
-│   └── docker-compose.yml
-├── package.json
-└── README.md
+src/                              React SPA
+solo_creator_agent/api_spa.py     FastAPI entry point
+solodeck_runtime/                 data sources, tools, persistence and verifier
+solodeck_v3/                      typed compiler, Skills, graph, validation and reward
+solodeck_v4/                      conversational runtime and orchestration
+solodeck_v4/decision_memory/      hierarchical temporal Decision Memory
+solodeck_eval/                    trajectory and evaluation utilities
+solodeck_bench/                   reproducible benchmark tasks
+tests/                            offline test suite
+functions/api/                    Cloudflare Pages API proxy
 ```
 
 ## Quick Start
 
-```bash
-cd solo_creator_agent
-conda env create -f environment.yml
-conda activate solodeck-py310
-python -m streamlit run app.py --server.address 0.0.0.0 --server.port 8501
-```
+Requirements:
 
-If you already have a compatible Python environment, install the same dependencies with:
+- Python 3.10+
+- Node.js 20+
+
+Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+git clone <repository-url>
+cd Solodeck.cn
+
+python -m venv .venv
+source .venv/bin/activate
+pip install -r solo_creator_agent/requirements.txt
+
+npm ci
 ```
 
-Open:
+Start the API and SPA together:
+
+```bash
+npm run dev
+```
+
+Default endpoints:
 
 ```text
-http://localhost:8501
+Frontend  http://localhost:5173
+API       http://localhost:8787
+Health    http://localhost:8787/api/health
 ```
 
-For a remote server:
+Build the frontend:
 
 ```bash
-ssh -L 8501:localhost:8501 username@server_ip
+npm run build
 ```
 
-Then open:
+The production frontend is written to `dist/`.
 
-```text
-http://localhost:8501
+## Configuration
+
+Copy the example configuration and replace placeholders locally:
+
+```bash
+cp solo_creator_agent/.env.example .env
 ```
 
-## Environment Variables
-
-Create `.env` in the repository root or configure environment variables directly:
+Relevant variables:
 
 ```env
-OPENAI_BASE_URL=https://aiping.cn/api/v1
-OPENAI_API_KEY_BASIC=your-basic-model-key
-OPENAI_MODEL_BASIC=Qwen3.5-Plus
-OPENAI_API_KEY_ADVANCED=your-advanced-model-key
-OPENAI_MODEL_ADVANCED=GLM-5-Turbo
+OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+OPENAI_API_KEY_BASIC=replace-with-basic-key
+OPENAI_MODEL_BASIC=your-basic-model
+OPENAI_API_KEY_ADVANCED=replace-with-advanced-key
+OPENAI_MODEL_ADVANCED=your-advanced-model
 
-SOLODECK_ACCESS_CODE=your-demo-code
-SOLODECK_REQUIRE_LOGIN=false
-CREATOR_ALIPAY_ACCOUNT=your-payment-account
+SOLODECK_AUTH_DB=/absolute/path/to/solodeck_auth.db
+SOLODECK_LANGFUSE_ENABLED=false
+SOLODECK_LANGFUSE_CAPTURE_CONTENT=false
 ```
 
-The app can run with mock/demo data without an LLM key. LLM keys enable screenshot/text extraction and more polished natural-language advice.
+LLM configuration is optional for deterministic data and statistical Skills. Vision extraction and natural-language polishing require a compatible model.
 
-Security note:
+Never commit `.env`, API keys, Tunnel credentials, authentication databases or uploaded user data. The repository `.gitignore` excludes these files.
 
-- Do not commit `.env` to GitHub.
-- Keep real API keys, access codes, and payment accounts in environment variables.
-- This repository only includes placeholders and `.env.example` style configuration.
-- If a key is accidentally committed, revoke it immediately and generate a new one.
+## API Surface
 
-## Generate Demo Data
+Main endpoints:
+
+```text
+POST /api/upload
+POST /api/data-agent/query
+GET  /api/data-agent/threads
+GET  /api/data-agent/threads/{thread_id}
+GET  /api/data-agent/runs
+
+POST /api/auth/register
+POST /api/auth/login
+GET  /api/auth/me
+POST /api/auth/logout
+
+GET  /api/v4/decision-memory/context
+POST /api/v4/decision-memory/outcomes
+POST /api/v4/decision-memory/consolidate
+```
+
+The Decision Memory service can also be used directly:
+
+```python
+from solodeck_v4.decision_memory import DecisionMemoryService
+
+memory = DecisionMemoryService()
+memory.record_decision(analysis_state, user_id="user_1", project_id="workspace_1")
+context = memory.get_decision_context(
+    "为什么最近收藏率下降？",
+    project_id="workspace_1",
+)
+summary = memory.run_consolidation("workspace_1", window_days=365)
+```
+
+## Reproducible Decision Memory Example
+
+The offline example writes five XHS Agent-content episodes, consolidates repeated evidence and checks causal wording policy:
 
 ```bash
-cd solo_creator_agent
-python scripts/generate_demo_upload_pack.py
+python scripts/decision_memory_example.py
 ```
 
-This regenerates:
+Expected properties:
 
-```text
-demo_upload_pack/
-solodeck_demo_upload_pack.zip
-```
+- five episodes are persisted
+- repeated question-title observations form a profile and strategy candidate
+- evidence level remains `observational`
+- `can_claim_causality` remains `false`
+- the query planner requests recent and previous save rate, topic mix, format mix and posting frequency from the live-data layer
 
-## Public Demo Script
+## Tests
+
+Run the complete offline suite:
 
 ```bash
-cd solo_creator_agent
-bash scripts/run_public_demo.sh
+pytest -q
 ```
 
-For production-like deployment:
+The suite covers data discovery, routing, statistical Skills, verifier behavior, account isolation, persistent conversations, incremental data revisions, Decision Memory retrieval, temporal regimes, consolidation and causal-safety gates.
 
-```bash
-cd solo_creator_agent
-bash scripts/deploy_docker.sh
-```
-
-Nginx and systemd examples are in:
-
-```text
-solo_creator_agent/deploy/
-```
-
-## Agent, KG and Causal Workflow
-
-The current SPA calls real Python Skills through FastAPI. The main endpoint for the full agent loop is:
-
-```text
-POST /api/full-agent
-```
-
-It returns:
-
-- `kg`: a lightweight knowledge graph built from content, platform, topic, title style, account, series, feedback keywords and revenue/conversion signals
-- `dag`: a candidate causal graph for hypothesis generation
-- `decision.effect`: ATE-style estimate, adjusted effect, CATE segments, IPTW fallback when feasible, and Bootstrap 95% confidence interval
-- `action_cards`: three action cards for continue, reduce/pause, or validate next week
-- `audit`: step-by-step audit trail without exposing raw uploaded rows
-
-### Knowledge Graph
-
-`solo_creator_agent/src/knowledge_graph.py` builds graph entities and relations:
-
-```text
-Content -> Platform
-Content -> Topic
-Content -> Title Style
-Content -> Series
-Content -> Text Feature
-Feedback Text -> Keyword Entity
-```
-
-The KG is used for explanation and constraints. It does not by itself claim causality.
-
-### Candidate DAG
-
-`solo_creator_agent/src/causal_discovery.py` generates candidate DAG edges. It tries optional libraries first:
-
-```text
-causal-learn PC
-LiNGAM
-```
-
-If those packages are not installed, SoloDeck uses a deterministic fallback:
-
-```text
-correlation screening + business time order + KG constraints
-```
-
-This creates a candidate DAG for low-cost validation planning, not a final proof.
-
-### Bootstrap Confidence Interval
-
-`EffectEstimationSkill` repeatedly resamples treatment and control groups, then recomputes the mean difference. The 2.5% and 97.5% quantiles become the 95% interval.
-
-Plain-English reading:
-
-```text
-If the interval crosses 0, the result is not stable enough to scale.
-If most or all of the interval is above 0, the strategy is more likely positive.
-If the interval is below 0, pause or redesign the strategy.
-```
-
-### LangGraph Workflow
-
-`solo_creator_agent/src/agent_workflow.py` is LangGraph-compatible. When `langgraph` is installed, it compiles and runs a `StateGraph`. When it is not installed, the same named nodes run through a deterministic fallback executor.
-
-```text
-DataIngestion
-  -> KnowledgeGraph
-  -> CausalDiscovery
-  -> DecisionQuestion
-  -> EffectEstimation
-  -> Reflection
-  -> Evaluation
-  -> ActionPlan
-```
-
-Reflection and Evaluation decide whether a result can be scaled or should loop into low-cost validation because the confidence interval is unstable.
-
-## SoloDeck v2: Self-Evolving Data Agent Runtime
-
-The v2 runtime lives in the top-level `solodeck/` package. It turns SoloDeck from a single decision-support app into a multi-agent data runtime:
-
-```text
-Document
-  -> NER / text chunking
-  -> Relation Extraction
-  -> Knowledge Graph
-  -> Causal Discovery
-  -> Candidate Causal Graph
-  -> GraphRAG-style evidence retrieval
-  -> Strategy Agent
-```
-
-Implemented modules:
-
-```text
-solodeck/compiler/task_compiler.py
-solodeck/planning/hypothesis_tree.py
-solodeck/runtime/budget_controller.py
-solodeck/runtime/skill_runtime.py
-solodeck/runtime/method_scheduler.py
-solodeck/runtime/model_router.py
-solodeck/verification/validators.py
-solodeck/evolution/process_reward.py
-solodeck/evolution/test_time_evolution.py
-solodeck/memory/trace_memory.py
-solodeck/workflows/data_agent_graph.py
-```
-
-The v2 API endpoint is:
-
-```text
-POST /api/v2-agent
-```
-
-It returns task spec, hypothesis tree, dynamic reasoning budget, selected plan, validation result, process rewards, memory update and developer-safe trace.
-
-LangGraph is used when installed. The current development environment installs `langgraph>=0.2`; if unavailable in a lighter deployment, the same node functions can run through the deterministic fallback executor.
-
-Run the benchmark:
+Run the data-agent benchmark:
 
 ```bash
 python solodeck_bench/run_benchmark.py
 ```
 
-Benchmark metrics include task success rate, artifact validity, causal overclaim rate, repair success rate, latency, reward and method entropy.
+Trajectory records follow the schema in `solodeck_eval/trajectory_schema.json` and are suitable for later supervised fine-tuning or policy-learning experiments. The repository does not claim that a production RL policy has already been trained.
 
-## Data Privacy and User Storage
+## Deployment
 
-SoloDeck includes a local account and workspace system:
+The repository includes:
 
-- user uploads are stored by user ID
-- imported records are stored per user
-- task status is stored per user
-- recommendation feedback is stored per user
-- passwords are hashed with PBKDF2
+- Cloudflare Pages proxy under `functions/api/`
+- Render configuration in `render.yaml`
+- systemd, Nginx and Cloudflare Tunnel examples under `solo_creator_agent/deploy/`
+- deployment notes in `DEPLOYMENT_SOLODECK_CN.md`
 
-The current version uses SQLite for easy demo and development. For commercial deployment, migrate storage to PostgreSQL or another managed database.
+Deploy the SPA and FastAPI service independently. Configure `SOLODECK_API_ORIGIN` in Cloudflare Pages so `/api/*` requests are forwarded to the API origin.
 
-## Current Limitations
+## Current Boundaries
 
-- Causal estimates are exploratory and should not be treated as definitive causal proof.
-- Screenshot extraction depends on the configured vision-capable model.
-- LangGraph is supported when installed; otherwise the same nodes run through the local fallback executor.
-- RAG is currently a lightweight TF-IDF knowledge matching module, not a full vector database pipeline.
-- Recommendation learning is a transparent bandit-style ranking adjustment, not a full reinforcement-learning system.
+- causal discovery produces candidate graphs that still require statistical or experimental validation
+- Decision Memory consolidation is deterministic and threshold-based; learned consolidation policies are not included
+- strategy candidates do not automatically enter the executable Skill library
+- SQLite is the default local backend; high-concurrency deployments should provide a PostgreSQL backend
+- optional causal-discovery libraries are not required by the lightweight installation
+- screenshot extraction depends on the configured vision model
 
-## Suggested GitHub Topics
+## Technical Documentation
 
-```text
-ai-agent
-creator-economy
-solo-business
-causal-inference
-streamlit
-data-analysis
-business-intelligence
-ab-testing
-productivity
-```
-
-## License
-
-This project is prepared for hackathon and demo use. Add a license before public commercial distribution.
+- [Agent architecture](ARCHITECTURE_AGENT.md)
+- [System design](SYSTEM_DESIGN.md)
+- [Evaluation protocol](EVAL_PROTOCOL.md)
+- [Causal module](CAUSAL_MODULE.md)
+- [Decision Memory](docs/DECISION_MEMORY.md)
+- [Agent RL preparation](AGENT_RL_MODULE.md)
+- [Deployment](DEPLOYMENT_SOLODECK_CN.md)

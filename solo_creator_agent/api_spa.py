@@ -602,17 +602,25 @@ async def layered_eval_api(payload: dict[str, Any]) -> JSONResponse:
 
 
 @app.post("/api/v4/session")
-async def v4_create_session(payload: dict[str, Any]) -> JSONResponse:
+async def v4_create_session(payload: dict[str, Any], request: Request) -> JSONResponse:
     did, _ = _get_df(payload.get("dataset_id"))
     session = create_session(dataset_id=did, cost_budget=float(payload.get("cost_budget", 1.0)))
+    current_user = _current_user(request)
+    session = update_session(
+        session["session_id"],
+        project_id=_request_workspace(request, payload.get("workspace_id")),
+        user_id=str(current_user["user_id"]) if current_user else _workspace_id(payload.get("workspace_id")),
+    )
     V4_SESSIONS[session["session_id"]] = did
     return JSONResponse(_json_safe(session))
 
 
 @app.get("/api/v4/session/{session_id}")
-async def v4_get_session(session_id: str) -> JSONResponse:
+async def v4_get_session(session_id: str, request: Request, workspace_id: str = "") -> JSONResponse:
     session = get_session(session_id)
     if not session:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    if session.get("project_id") and session["project_id"] != _request_workspace(request, workspace_id):
         return JSONResponse({"error": "session not found"}, status_code=404)
     return JSONResponse(_json_safe(session))
 
@@ -623,7 +631,7 @@ async def v4_tools() -> JSONResponse:
 
 
 @app.post("/api/v4/chat")
-async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
+async def v4_chat(payload: dict[str, Any], request: Request) -> JSONResponse:
     message = (payload.get("message") or payload.get("task") or "").strip()
     if not message:
         return JSONResponse({"error": "message required"}, status_code=400)
@@ -640,6 +648,15 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = did
     persisted_session = get_session(session_id) or {}
+    expected_project = _request_workspace(request, payload.get("workspace_id"))
+    if persisted_session.get("project_id") and persisted_session["project_id"] != expected_project:
+        return JSONResponse({"error": "session not found"}, status_code=404)
+    current_user = _current_user(request)
+    persisted_session = update_session(
+        session_id,
+        project_id=expected_project,
+        user_id=str(current_user["user_id"]) if current_user else expected_project,
+    )
     did = V4_SESSIONS.get(session_id) or persisted_session.get("dataset_id") or payload.get("dataset_id")
     try:
         _, df = _get_df(did)
@@ -665,6 +682,7 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
         "evidence_level": result.get("evidence_level"),
         "failure_report": result.get("failure_report"),
         "memory_updates": result.get("memory_updates"),
+        "decision_memory_update": result.get("decision_memory_update"),
         "cost_spent": result.get("cost_spent"),
         "session_cost_total": result.get("session_cost_total"),
         "version": result.get("version"),
@@ -748,6 +766,12 @@ async def data_agent_query(payload: dict[str, Any], request: Request) -> JSONRes
         session = create_session(dataset_id=dataset_id, cost_budget=float(payload.get("cost_budget", 10.0)))
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = dataset_id
+    current_user = _current_user(request)
+    persisted_session = update_session(
+        session_id,
+        project_id=workspace_id,
+        user_id=str(current_user["user_id"]) if current_user else workspace_id,
+    )
     WORKSPACES.bind_thread_session(workspace_id, thread_id, session_id, dataset_id)
     started = time.perf_counter()
     result = run_v4_agent(message, frame, session_id, text=TEXTS.get(dataset_id, ""))
@@ -776,6 +800,7 @@ async def data_agent_query(payload: dict[str, Any], request: Request) -> JSONRes
         "evidence_level": result.get("evidence_level"),
         "failure_report": result.get("failure_report"),
         "memory_updates": result.get("memory_updates"),
+        "decision_memory_update": result.get("decision_memory_update"),
         "cost_spent": result.get("cost_spent"),
         "state_id": result.get("state_id"),
         "result_view": result_view,
@@ -865,10 +890,11 @@ async def v4_trace_replay(trace_id: str, checkpoint: int = -1) -> JSONResponse:
 
 
 @app.get("/api/v4/memory/trace")
-async def v4_memory_trace(project_id: str = "solodeck", session_id: str | None = None) -> JSONResponse:
+async def v4_memory_trace(request: Request, project_id: str = "", session_id: str | None = None) -> JSONResponse:
     from solodeck_v4.memory import UnifiedMemory
 
-    rows = UnifiedMemory().export_memory_trace(project_id, session_id)
+    current_project = _request_workspace(request, project_id)
+    rows = UnifiedMemory().export_memory_trace(current_project, session_id)
     safe = [
         {
             "memory_id": row["memory_id"], "memory_type": row["memory_type"],
@@ -879,7 +905,51 @@ async def v4_memory_trace(project_id: str = "solodeck", session_id: str | None =
         }
         for row in rows
     ]
-    return JSONResponse(_json_safe({"project_id": project_id, "session_id": session_id, "items": safe}))
+    return JSONResponse(_json_safe({"project_id": current_project, "session_id": session_id, "items": safe}))
+
+
+@app.get("/api/v4/decision-memory/context")
+async def v4_decision_memory_context(request: Request, query: str, workspace_id: str = "") -> JSONResponse:
+    from solodeck_v4.decision_memory import DecisionMemoryService
+
+    project_id = _request_workspace(request, workspace_id)
+    context = DecisionMemoryService().get_decision_context(query, project_id=project_id)
+    return JSONResponse(_json_safe(context))
+
+
+@app.post("/api/v4/decision-memory/outcomes")
+async def v4_decision_memory_outcome(payload: dict[str, Any], request: Request) -> JSONResponse:
+    from solodeck_v4.decision_memory import DecisionMemoryService
+
+    project_id = _request_workspace(request, payload.get("workspace_id"))
+    service = DecisionMemoryService()
+    episode_id = str(payload.get("episode_id") or "")
+    episode = service.store.get_episode(episode_id)
+    if not episode or episode.project_id != project_id:
+        return JSONResponse({"error": "决策记录不存在或不属于当前工作区。"}, status_code=404)
+    metrics = payload.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        return JSONResponse({"error": "metrics 必须是指标字典。"}, status_code=400)
+    try:
+        normalized_metrics = {str(key): float(value) for key, value in metrics.items()}
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "metrics 中的值必须是数字。"}, status_code=400)
+    result = service.record_outcome(
+        episode_id,
+        metrics=normalized_metrics,
+        success=payload.get("success"),
+        observed_at=payload.get("observed_at"),
+    )
+    return JSONResponse(_json_safe(result))
+
+
+@app.post("/api/v4/decision-memory/consolidate")
+async def v4_decision_memory_consolidate(payload: dict[str, Any], request: Request) -> JSONResponse:
+    from solodeck_v4.decision_memory import DecisionMemoryService
+
+    project_id = _request_workspace(request, payload.get("workspace_id"))
+    window_days = max(1, min(int(payload.get("window_days", 365)), 3650))
+    return JSONResponse(_json_safe(DecisionMemoryService().run_consolidation(project_id, window_days)))
 
 
 @app.get("/api/v4/states/{state_id}")

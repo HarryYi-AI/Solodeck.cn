@@ -329,7 +329,7 @@ def _thread_title(value: str) -> str:
 def _safe_message_result(result: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "reply", "user_artifact", "result_view", "validation_report", "evidence_level",
-        "state_id", "task_spec", "workflow_summary", "data_agent_trace", "run",
+        "state_id", "task_spec", "workflow_summary", "data_agent_trace", "run", "decision_memory_update",
     }
     return {key: result.get(key) for key in allowed if result.get(key) is not None}
 

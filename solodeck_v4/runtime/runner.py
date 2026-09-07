@@ -376,7 +376,7 @@ def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str,
             cache[art["id"]] = art
 
     summary = merge_turn_into_summary(session, state.get("message", ""), reply[:120])
-    update_session(
+    updated_session = update_session(
         session_id,
         linked_entities={**session.get("linked_entities", {}), **linked},
         last_task_spec=state.get("task_spec"),
@@ -393,6 +393,17 @@ def _finalize_session(session_id: str, session: dict[str, Any], state: dict[str,
             "summary": reply[:120],
         }],
     )
+    try:
+        from solodeck_v4.decision_memory import DecisionMemoryService
+
+        state["decision_memory_update"] = DecisionMemoryService().record_decision(
+            state,
+            user_id=str(updated_session.get("user_id") or "anonymous"),
+            project_id=str(updated_session.get("project_id") or "solodeck"),
+            data_source_ids=[str(updated_session.get("dataset_id"))] if updated_session.get("dataset_id") else [],
+        )
+    except Exception as exc:
+        state["decision_memory_update"] = {"recorded": False, "error": type(exc).__name__}
 
 
 def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
@@ -434,6 +445,7 @@ def _package(state: dict[str, Any], reply: str) -> dict[str, Any]:
         "evidence_level": state.get("evidence_level"),
         "failure_report": state.get("failure_report"),
         "memory_updates": state.get("memory_updates"),
+        "decision_memory_update": state.get("decision_memory_update"),
         "skill_manifests": state.get("skill_manifests"),
         "selected_skills": list(dict.fromkeys(state.get("selected_skills") or [])),
         "trace": state.get("trace"),

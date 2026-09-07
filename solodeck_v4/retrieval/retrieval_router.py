@@ -93,6 +93,7 @@ def retrieve_memory(
     evidence: list[dict[str, Any]] = []
     missing_info: list[str] = []
     warnings: list[str] = []
+    project_id = (session or {}).get("project_id", "solodeck")
 
     if "schema" in sources:
         evidence.extend(retrieve_schema(query, task_spec, store))
@@ -129,8 +130,39 @@ def retrieve_memory(
     if intent == "causal_question" and _only_text_evidence(evidence):
         warnings.append("因果问题仅命中文本证据，强制 causal_readiness_check")
 
+    decision_context: dict[str, Any] = {}
+    try:
+        from solodeck_v4.decision_memory import DecisionMemoryService
+
+        decision_context = DecisionMemoryService().get_decision_context(
+            query, project_id=project_id, task_spec=task_spec,
+        )
+        for episode in decision_context.get("similar_episodes", [])[:8]:
+            decision = episode.get("decision") or {}
+            evidence.append({
+                "source_type": "decision_memory",
+                "source_id": episode.get("episode_id"),
+                "content": f"历史策略：{decision.get('strategy', '')}；依据：{decision.get('reason', '')}",
+                "structured_payload": {
+                    "decision_context": episode.get("decision_context"),
+                    "evidence": episode.get("evidence"),
+                    "outcome": episode.get("outcome"),
+                },
+                "score": episode.get("retrieval_score", 0),
+                "used_for": "historical_decision_context",
+                "warnings": ["历史结果不能替代当前数据计算。"],
+                "privacy_level": "project",
+            })
+        warnings.extend(decision_context.get("warnings", []))
+        if (decision_context.get("query_plan") or {}).get("requires_live_data"):
+            missing_info.extend((decision_context["query_plan"].get("live_data_requirements") or []))
+    except Exception as exc:
+        warnings.append(f"长期决策记忆暂不可用：{type(exc).__name__}")
+
     plan = f"{intent} -> {' + '.join(sources)}"
-    return pack_evidence(query, plan, evidence, missing_info, warnings)
+    packed = pack_evidence(query, plan, evidence, list(dict.fromkeys(missing_info)), list(dict.fromkeys(warnings)))
+    packed["decision_memory"] = decision_context
+    return packed
 
 
 def _retrieve_unified_memory(query: str, sources: list[str], session: dict[str, Any] | None) -> list[dict[str, Any]]:
