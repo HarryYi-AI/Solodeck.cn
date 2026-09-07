@@ -1222,4 +1222,6 @@ h1 { font-size: 34px; letter-spacing: 0; }
 @media (max-width: 760px) {
   .execution-flow { display: grid; grid-template-columns: 1fr 1fr; }
   .execution-flow i { display: none; }
+  .workspace-head h1 { font-size: 17px; white-space: nowrap; }
+  .workspace-status { font-size: 10px; padding: 5px 7px; }
 }
