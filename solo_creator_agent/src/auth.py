@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .config import SOLODECK_AUTH_DB_PATH
@@ -16,10 +16,18 @@ def auth_db_path() -> Path:
     return SOLODECK_AUTH_DB_PATH
 
 
+def _connect() -> sqlite3.Connection:
+    connection = sqlite3.connect(auth_db_path(), timeout=10)
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=10000")
+    return connection
+
+
 def init_auth_db() -> None:
     db = auth_db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -33,6 +41,19 @@ def init_auth_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at)")
         conn.commit()
 
 
@@ -56,7 +77,7 @@ def register_user(email: str, password: str, display_name: str = "") -> dict:
     password_hash = _hash_password(password, salt)
     now = datetime.now(timezone.utc).isoformat()
     try:
-        with sqlite3.connect(auth_db_path()) as conn:
+        with _connect() as conn:
             cursor = conn.execute(
                 "INSERT INTO users (email, password_hash, salt, display_name, created_at) VALUES (?, ?, ?, ?, ?)",
                 (email, password_hash, salt, display_name.strip() or email, now),
@@ -71,7 +92,7 @@ def register_user(email: str, password: str, display_name: str = "") -> dict:
 def login_user(email: str, password: str) -> dict:
     init_auth_db()
     email = _normalize_email(email)
-    with sqlite3.connect(auth_db_path()) as conn:
+    with _connect() as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
         if row is None:
@@ -87,5 +108,52 @@ def login_user(email: str, password: str) -> dict:
 
 def user_count() -> int:
     init_auth_db()
-    with sqlite3.connect(auth_db_path()) as conn:
+    with _connect() as conn:
         return int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+
+def create_auth_session(user_id: int, days: int = 30) -> str:
+    init_auth_db()
+    token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=max(1, min(days, 90)))
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO auth_sessions(token_hash, user_id, created_at, expires_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+            (token_hash, int(user_id), now.isoformat(), expires.isoformat(), now.isoformat()),
+        )
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (now.isoformat(),))
+    return token
+
+
+def user_from_session(token: str | None) -> dict | None:
+    if not token:
+        return None
+    init_auth_db()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now = datetime.now(timezone.utc)
+    with _connect() as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT users.id, users.email, users.display_name, auth_sessions.expires_at
+            FROM auth_sessions JOIN users ON users.id = auth_sessions.user_id
+            WHERE auth_sessions.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+        if row is None or datetime.fromisoformat(row["expires_at"]) <= now:
+            conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
+            return None
+        conn.execute("UPDATE auth_sessions SET last_seen_at = ? WHERE token_hash = ?", (now.isoformat(), token_hash))
+    return {"user_id": int(row["id"]), "email": row["email"], "display_name": row["display_name"] or row["email"]}
+
+
+def revoke_auth_session(token: str | None) -> None:
+    if not token:
+        return
+    init_auth_db()
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with _connect() as conn:
+        conn.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))

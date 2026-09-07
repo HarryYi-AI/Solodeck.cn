@@ -4,7 +4,8 @@ import {
   Activity, ArrowRight, BarChart3, Check, CheckCircle2, ChevronDown, Circle,
   Database, FileText, FileUp, GitBranch, History, Layers3, Loader2, Menu,
   MessageSquare, Mic, MicOff, PanelRightClose, PanelRightOpen, PauseCircle,
-  Rocket, Search, Send, ShieldCheck, Sparkles, Table2, UploadCloud, Workflow, X
+  LogIn, LogOut, Plus, Rocket, Search, Send, ShieldCheck, Sparkles, Table2,
+  Trash2, UploadCloud, UserRound, Workflow, X
 } from "lucide-react";
 import "./styles.css";
 
@@ -100,7 +101,7 @@ async function parseApiResponse(res) {
 
 async function apiPost(path, body) {
   const key = `${path}:${JSON.stringify(body || {})}`;
-  const noCache = path.includes("/api/v4/chat") || path.includes("/api/data-agent/query");
+  const noCache = path.includes("/api/v4/chat") || path.includes("/api/data-agent/query") || path.includes("/api/auth/");
   if (!noCache && cache.has(key)) return cache.get(key);
   const promise = fetch(path, {
     method: "POST",
@@ -120,6 +121,67 @@ async function apiGet(path) {
   const data = await parseApiResponse(res);
   if (!res.ok) throw new Error(data.error || API_UNAVAILABLE);
   return data;
+}
+
+async function apiDelete(path) {
+  const res = await fetch(path, { method: "DELETE" });
+  const data = await parseApiResponse(res);
+  if (!res.ok) throw new Error(data.error || API_UNAVAILABLE);
+  return data;
+}
+
+function AuthModal({ open, onClose, onAuthenticated }) {
+  const [mode, setMode] = useState("login");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!open) return null;
+
+  async function submit(event) {
+    event.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiPost(`/api/auth/${mode}`, {
+        email,
+        password,
+        display_name: displayName
+      });
+      cache.clear();
+      onAuthenticated(data);
+      onClose();
+    } catch (submitError) {
+      setError(submitError.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="auth-modal" role="dialog" aria-modal="true" aria-label="SoloDeck 账号">
+        <button className="modal-close" type="button" onClick={onClose} aria-label="关闭"><X size={18} /></button>
+        <span className="auth-mark"><span className="mini-logo" /></span>
+        <h2>{mode === "login" ? "欢迎回来" : "建立你的分析空间"}</h2>
+        <p>登录后，数据、对话与分析记录只保存在你的工作区。</p>
+        <div className="auth-tabs">
+          <button className={mode === "login" ? "active" : ""} type="button" onClick={() => { setMode("login"); setError(""); }}>登录</button>
+          <button className={mode === "register" ? "active" : ""} type="button" onClick={() => { setMode("register"); setError(""); }}>注册</button>
+        </div>
+        <form onSubmit={submit}>
+          {mode === "register" ? <label>称呼<input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="例如：林杰" autoComplete="name" /></label> : null}
+          <label>邮箱或手机号<input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" autoComplete="username" required /></label>
+          <label>密码<input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 6 位" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={6} required /></label>
+          {error ? <div className="auth-error">{error}</div> : null}
+          <button className="auth-submit" type="submit" disabled={loading}>{loading ? <Loader2 className="spin" size={17} /> : null}{mode === "login" ? "登录" : "注册并进入"}</button>
+        </form>
+        <small>未登录时也可试用，记录只保存在当前浏览器工作区。</small>
+      </section>
+    </div>
+  );
 }
 
 function Trace({ trace }) {
@@ -425,7 +487,7 @@ function RunInspector({ run, loading, phase, history, collapsed, setCollapsed, o
   );
 }
 
-function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComplete }) {
+function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, threadId, setThreadId, onRunComplete }) {
   const [sessionId, setSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -469,6 +531,34 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
   }, [datasetId]);
 
   useEffect(() => {
+    if (!threadId) return;
+    let active = true;
+    apiGet(`/api/data-agent/threads/${threadId}?workspace_id=${encodeURIComponent(workspaceId)}`)
+      .then((thread) => {
+        if (!active) return;
+        setSessionId(thread.session_id || null);
+        const restored = (thread.messages || []).map((message) => ({
+          role: message.role,
+          content: message.content,
+          artifact: message.result?.user_artifact,
+          validation: message.result?.validation_report,
+          run: message.result
+        }));
+        setMessages(restored);
+        const assistantRuns = restored.filter((message) => message.role === "assistant" && message.run);
+        setLatestRun(assistantRuns.at(-1)?.run || null);
+        setRunHistory(assistantRuns.map((message) => ({
+          state_id: message.run?.state_id,
+          summary: message.content?.slice(0, 80)
+        })).filter((item) => item.state_id));
+      })
+      .catch(() => {
+        if (active) setThreadId(null);
+      });
+    return () => { active = false; };
+  }, [threadId, workspaceId]);
+
+  useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
     const collapseOnMobile = (event) => {
       if (event.matches) setInspectorCollapsed(true);
@@ -491,11 +581,13 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
     try {
       const data = await apiPost("/api/data-agent/query", {
         session_id: sessionId,
+        thread_id: threadId,
         dataset_id: datasetId,
         workspace_id: workspaceId,
         message: text
       });
       setSessionId(data.session_id);
+      setThreadId(data.thread_id);
       window.__SOLODECK_AGENT_RUN__ = data;
       setLatestRun(data);
       if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
@@ -524,11 +616,13 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
     try {
       const data = await apiPost("/api/data-agent/query", {
         session_id: sessionId,
+        thread_id: threadId,
         dataset_id: datasetId,
         workspace_id: workspaceId,
         message: text
       });
       setSessionId(data.session_id || sessionId);
+      setThreadId(data.thread_id);
       window.__SOLODECK_AGENT_RUN__ = data;
       setLatestRun(data);
       if (data.state_id) setRunHistory((prev) => [...prev, { state_id: data.state_id, summary: text }]);
@@ -663,7 +757,7 @@ function ChatPage({ datasetId, dataset, mapping, setPage, workspaceId, onRunComp
   );
 }
 
-function Sidebar({ page, setPage, collapsed, setCollapsed }) {
+function Sidebar({ page, setPage, collapsed, setCollapsed, threads, threadId, onNewThread, onSelectThread, onArchiveThread, auth, onOpenAuth, onLogout }) {
   return (
     <>
       <button className="sidebar-toggle" onClick={() => setCollapsed(!collapsed)} aria-label="切换侧栏">
@@ -693,6 +787,31 @@ function Sidebar({ page, setPage, collapsed, setCollapsed }) {
             );
           })}
         </nav>
+        <div className="thread-section">
+          <div className="thread-heading"><span>最近对话</span><button type="button" onClick={onNewThread} title="新对话"><Plus size={16} /></button></div>
+          <div className="thread-list">
+            {threads.length ? threads.map((thread) => (
+              <div className={`thread-row ${threadId === thread.thread_id ? "active" : ""}`} key={thread.thread_id}>
+                <button className="thread-open" type="button" onClick={() => onSelectThread(thread)} title={thread.title}><MessageSquare size={14} /><span>{thread.title}</span></button>
+                <button className="thread-delete" type="button" title="移除对话" onClick={() => onArchiveThread(thread.thread_id)}><Trash2 size={13} /></button>
+              </div>
+            )) : <p className="thread-empty">分析后的对话会保存在这里</p>}
+          </div>
+        </div>
+        <div className="account-area">
+          {auth?.authenticated ? (
+            <button type="button" className="account-button" onClick={onLogout} title="退出登录">
+              <span className="account-avatar"><UserRound size={16} /></span>
+              <span><strong>{auth.user?.display_name}</strong><small>个人工作区</small></span>
+              <LogOut size={15} />
+            </button>
+          ) : (
+            <button type="button" className="account-button" onClick={onOpenAuth}>
+              <span className="account-avatar"><LogIn size={16} /></span>
+              <span><strong>登录或注册</strong><small>跨设备保存记录</small></span>
+            </button>
+          )}
+        </div>
       </aside>
     </>
   );
@@ -1227,7 +1346,7 @@ function EmptyDatasetPage({ setPage }) {
 function App() {
   const [page, setPage] = useState("chat");
   const [collapsed, setCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth < 760);
-  const [workspaceId] = useState(() => {
+  const [anonymousWorkspaceId] = useState(() => {
     const saved = window.localStorage.getItem("solodeck_workspace_id");
     if (saved) return saved;
     const randomPart = (window.crypto?.randomUUID?.() || "").replaceAll("-", "");
@@ -1235,18 +1354,28 @@ function App() {
     window.localStorage.setItem("solodeck_workspace_id", value);
     return value;
   });
+  const [auth, setAuth] = useState(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [datasetId, setDatasetId] = useState(null);
   const [datasets, setDatasets] = useState([]);
   const [runs, setRuns] = useState([]);
+  const [threads, setThreads] = useState([]);
+  const [threadId, setThreadId] = useState(null);
   const [mapping, setMapping] = useState(null);
   const [questionId, setQuestionId] = useState("pain_point_title");
   const [, setDiag] = useState(null);
   const [, setDecision] = useState(null);
+  const workspaceId = auth?.workspace_id || anonymousWorkspaceId;
 
   async function refreshWorkspace() {
-    const data = await apiGet(`/api/data-agent/workspace?workspace_id=${encodeURIComponent(workspaceId)}`);
+    const [data, threadData] = await Promise.all([
+      apiGet(`/api/data-agent/workspace?workspace_id=${encodeURIComponent(workspaceId)}`),
+      apiGet(`/api/data-agent/threads?workspace_id=${encodeURIComponent(workspaceId)}`)
+    ]);
     setDatasets(data.datasets || []);
     setRuns(data.runs || []);
+    setThreads(threadData.threads || []);
     if (!datasetId && data.datasets?.length) {
       setDatasetId(data.datasets[0].dataset_id);
       setMapping(data.datasets[0].mapping || null);
@@ -1259,24 +1388,68 @@ function App() {
     setMapping(dataset.mapping || null);
   }
 
-  useEffect(() => { refreshWorkspace().catch(() => {}); }, [workspaceId]);
+  useEffect(() => {
+    apiGet("/api/auth/me")
+      .then(setAuth)
+      .catch(() => setAuth({ authenticated: false }))
+      .finally(() => setAuthReady(true));
+  }, []);
+
+  useEffect(() => {
+    if (!authReady) return;
+    setDatasetId(null);
+    setMapping(null);
+    setThreadId(null);
+    setDatasets([]);
+    setRuns([]);
+    setThreads([]);
+    refreshWorkspace().catch(() => {});
+  }, [workspaceId, authReady]);
+
+  function newThread() {
+    setThreadId(null);
+    setPage("chat");
+  }
+
+  function selectThread(thread) {
+    setThreadId(thread.thread_id);
+    if (thread.dataset_id) {
+      setDatasetId(thread.dataset_id);
+      const selected = datasets.find((item) => item.dataset_id === thread.dataset_id);
+      if (selected) setMapping(selected.mapping || null);
+    }
+    setPage("chat");
+  }
+
+  async function archiveThread(id) {
+    await apiDelete(`/api/data-agent/threads/${id}?workspace_id=${encodeURIComponent(workspaceId)}`);
+    if (threadId === id) newThread();
+    await refreshWorkspace();
+  }
+
+  async function logout() {
+    await apiPost("/api/auth/logout", {});
+    cache.clear();
+    setAuth({ authenticated: false });
+  }
 
   const currentDataset = datasets.find((item) => item.dataset_id === datasetId) || null;
   const needsData = !datasetId && !["upload", "runs", "chat"].includes(page);
 
   return (
     <div className="shell">
-      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} />
+      <Sidebar page={page} setPage={setPage} collapsed={collapsed} setCollapsed={setCollapsed} threads={threads} threadId={threadId} onNewThread={newThread} onSelectThread={selectThread} onArchiveThread={(id) => archiveThread(id).catch(() => {})} auth={auth} onOpenAuth={() => setAuthOpen(true)} onLogout={() => logout().catch(() => {})} />
       <main className={collapsed ? "expanded" : ""}>
         {page === "upload" && <UploadPage datasetId={datasetId} mapping={mapping} setDatasetId={setDatasetId} setMapping={setMapping} setPage={setPage} workspaceId={workspaceId} datasets={datasets} refreshWorkspace={refreshWorkspace} selectDataset={selectDataset} />}
         {page === "runs" && <RunsPage runs={runs} datasets={datasets} selectDataset={selectDataset} setPage={setPage} />}
-        {page === "chat" && <ChatPage datasetId={datasetId} dataset={currentDataset} mapping={mapping} setPage={setPage} workspaceId={workspaceId} onRunComplete={() => refreshWorkspace().catch(() => {})} />}
+        {page === "chat" && <ChatPage key={`${workspaceId}:${threadId || "new"}:${datasetId || "empty"}`} datasetId={datasetId} dataset={currentDataset} mapping={mapping} setPage={setPage} workspaceId={workspaceId} threadId={threadId} setThreadId={setThreadId} onRunComplete={() => refreshWorkspace().catch(() => {})} />}
         {needsData && <EmptyDatasetPage setPage={setPage} />}
         {!needsData && page === "diagnose" && <DiagnosePage datasetId={datasetId} questionId={questionId} setDiag={setDiag} />}
         {!needsData && page === "decision" && <DecisionPage datasetId={datasetId} questionId={questionId} setQuestionId={setQuestionId} setDecision={setDecision} />}
         {!needsData && page === "agent" && <AgentPage datasetId={datasetId} questionId={questionId} />}
         {!needsData && page === "actions" && <ActionPage datasetId={datasetId} questionId={questionId} />}
       </main>
+      <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={setAuth} />
     </div>
   );
 }

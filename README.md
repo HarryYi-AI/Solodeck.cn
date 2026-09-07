@@ -57,7 +57,20 @@ User data
 -> user-facing action cards
 ```
 
-The default user interface remains simple: upload data, see diagnosis, check whether a decision is reliable, and read three next actions. The technical layer is available in the developer trace panel for review, but it is not exposed as raw JSON to users.
+The default user interface is a conversation-first analysis workbench: connect data, ask a question, inspect the computed evidence, and continue asking within the same analytical thread. The technical layer is available in the execution inspector for review, but it is not exposed as raw JSON to users.
+
+### Accounts, Workspaces, and Conversation Memory
+
+The product data model is `user -> workspace -> datasets -> threads -> messages/runs`.
+
+- Login sessions use random opaque tokens stored as hashes in SQLite and sent through `HttpOnly`, `SameSite=Lax` cookies.
+- The API derives the workspace from the authenticated user; a client-provided workspace ID cannot override it.
+- A newly registered user starts with an empty workspace. Demo data is loaded only after the user explicitly requests it.
+- Every analysis thread keeps its dataset and v4 Agent `session_id`, so follow-up questions reuse the prior task context after a refresh or on another device.
+- The sidebar stores conversation history; the task-record page keeps lower-level execution history. These are separate on purpose.
+- Persisted assistant messages contain display-safe artifacts and validation summaries, not raw uploaded rows.
+
+Anonymous use remains available for evaluation. Its workspace identifier is stored in the current browser, so cross-device history requires an account.
 
 Research ideas used in the runtime:
 

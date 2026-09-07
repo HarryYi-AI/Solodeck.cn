@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -27,6 +27,13 @@ from src.data_loader import load_contents
 from src.llm_agent import extract_records_from_uploads
 from src.mock_data import generate_all
 from src.skills import dataset_fingerprint, run_skill_pipeline
+from src.auth import (
+    create_auth_session,
+    login_user,
+    register_user,
+    revoke_auth_session,
+    user_from_session,
+)
 from solodeck.workflows.data_agent_graph import run_data_agent_graph
 from solodeck_v3.workflows.data_agent_graph import run_v3_data_agent
 from solodeck_v4.runtime.runner import create_session, run_v4_agent
@@ -54,6 +61,7 @@ V4_SESSIONS: dict[str, str] = {}
 RUNTIME_DATASET_ROOT = REPO_ROOT / "data" / "runtime_datasets"
 RUNTIME_DATASET_ROOT.mkdir(parents=True, exist_ok=True)
 WORKSPACES = DataWorkspaceRepository()
+AUTH_COOKIE = "solodeck_session"
 
 
 def _workspace_id(value: str | None) -> str:
@@ -61,6 +69,28 @@ def _workspace_id(value: str | None) -> str:
     if re.fullmatch(r"[A-Za-z0-9_-]{8,96}", candidate):
         return candidate
     return "workspace_local"
+
+
+def _current_user(request: Request) -> dict[str, Any] | None:
+    return user_from_session(request.cookies.get(AUTH_COOKIE))
+
+
+def _request_workspace(request: Request, supplied: str | None = None) -> str:
+    user = _current_user(request)
+    return f"user_{user['user_id']}" if user else _workspace_id(supplied)
+
+
+def _set_auth_cookie(response: JSONResponse, request: Request, token: str) -> None:
+    forwarded = request.headers.get("x-forwarded-proto", "").lower()
+    response.set_cookie(
+        AUTH_COOKIE,
+        token,
+        max_age=30 * 24 * 60 * 60,
+        httponly=True,
+        secure=request.url.scheme == "https" or forwarded == "https",
+        samesite="lax",
+        path="/",
+    )
 
 
 def _json_safe(value: Any) -> Any:
@@ -237,6 +267,50 @@ def health() -> dict[str, Any]:
     return {"ok": True, "service": "SoloDeck Skill API", "observability": langfuse_status()}
 
 
+@app.post("/api/auth/register")
+async def auth_register(payload: dict[str, Any], request: Request) -> JSONResponse:
+    result = register_user(
+        str(payload.get("email") or ""),
+        str(payload.get("password") or ""),
+        str(payload.get("display_name") or ""),
+    )
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error")}, status_code=400)
+    token = create_auth_session(int(result["user_id"]))
+    user = {key: result[key] for key in ("user_id", "email", "display_name")}
+    response = JSONResponse({"authenticated": True, "user": user, "workspace_id": f"user_{result['user_id']}"})
+    _set_auth_cookie(response, request, token)
+    return response
+
+
+@app.post("/api/auth/login")
+async def auth_login(payload: dict[str, Any], request: Request) -> JSONResponse:
+    result = login_user(str(payload.get("email") or ""), str(payload.get("password") or ""))
+    if not result.get("ok"):
+        return JSONResponse({"error": result.get("error")}, status_code=401)
+    token = create_auth_session(int(result["user_id"]))
+    user = {key: result[key] for key in ("user_id", "email", "display_name")}
+    response = JSONResponse({"authenticated": True, "user": user, "workspace_id": f"user_{result['user_id']}"})
+    _set_auth_cookie(response, request, token)
+    return response
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request) -> JSONResponse:
+    user = _current_user(request)
+    if not user:
+        return JSONResponse({"authenticated": False, "user": None})
+    return JSONResponse({"authenticated": True, "user": user, "workspace_id": f"user_{user['user_id']}"})
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request) -> JSONResponse:
+    revoke_auth_session(request.cookies.get(AUTH_COOKIE))
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(AUTH_COOKIE, path="/")
+    return response
+
+
 @app.get("/api/v4/observability")
 def v4_observability() -> dict[str, Any]:
     from solodeck_v4.observability import langfuse_status
@@ -252,6 +326,7 @@ def demo() -> JSONResponse:
 
 @app.post("/api/upload")
 async def upload(
+    request: Request,
     files: list[UploadFile] = File(default=[]),
     text: str = Form(default=""),
     workspace_id: str = Form(default=""),
@@ -322,7 +397,7 @@ async def upload(
     TEXTS[final_did] = full_text
     _persist_runtime_dataset(final_did, df, full_text)
     dataset = WORKSPACES.register_dataset(
-        _workspace_id(workspace_id),
+        _request_workspace(request, workspace_id),
         final_did,
         "、".join(source_names[:3]) if source_names else "粘贴文本",
         "文件上传" if source_names else "文本输入",
@@ -342,8 +417,8 @@ async def upload(
 
 
 @app.post("/api/data-agent/demo")
-async def data_agent_demo(payload: dict[str, Any]) -> JSONResponse:
-    workspace_id = _workspace_id(payload.get("workspace_id"))
+async def data_agent_demo(payload: dict[str, Any], request: Request) -> JSONResponse:
+    workspace_id = _request_workspace(request, payload.get("workspace_id"))
     result = _run(None)
     did, frame = _get_df(result["dataset_id"])
     dataset = WORKSPACES.register_dataset(
@@ -359,8 +434,8 @@ async def data_agent_demo(payload: dict[str, Any]) -> JSONResponse:
 
 
 @app.get("/api/data-agent/workspace")
-async def data_agent_workspace(workspace_id: str = "") -> JSONResponse:
-    current = _workspace_id(workspace_id)
+async def data_agent_workspace(request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
     datasets = WORKSPACES.list_datasets(current)
     runs = WORKSPACES.list_runs(current)
     return JSONResponse(_json_safe({
@@ -376,8 +451,8 @@ async def data_agent_workspace(workspace_id: str = "") -> JSONResponse:
 
 
 @app.get("/api/data-agent/datasets/{dataset_id}")
-async def data_agent_dataset(dataset_id: str, workspace_id: str = "") -> JSONResponse:
-    current = _workspace_id(workspace_id)
+async def data_agent_dataset(dataset_id: str, request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
     dataset = WORKSPACES.get_dataset(current, dataset_id)
     if not dataset:
         return JSONResponse({"error": "数据集不存在或不属于当前工作区。"}, status_code=404)
@@ -583,12 +658,45 @@ async def v4_chat(payload: dict[str, Any]) -> JSONResponse:
     return JSONResponse(_json_safe(safe))
 
 
+@app.post("/api/data-agent/threads")
+async def create_data_agent_thread(payload: dict[str, Any], request: Request) -> JSONResponse:
+    workspace_id = _request_workspace(request, payload.get("workspace_id"))
+    dataset_id = str(payload.get("dataset_id") or "") or None
+    if dataset_id and not WORKSPACES.get_dataset(workspace_id, dataset_id):
+        return JSONResponse({"error": "数据集不存在或不属于当前工作区。"}, status_code=404)
+    thread = WORKSPACES.create_thread(workspace_id, dataset_id, str(payload.get("title") or "新对话"))
+    return JSONResponse(_json_safe(thread))
+
+
+@app.get("/api/data-agent/threads")
+async def list_data_agent_threads(request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
+    return JSONResponse(_json_safe({"threads": WORKSPACES.list_threads(current)}))
+
+
+@app.get("/api/data-agent/threads/{thread_id}")
+async def get_data_agent_thread(thread_id: str, request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
+    thread = WORKSPACES.get_thread(current, thread_id, include_messages=True)
+    if not thread:
+        return JSONResponse({"error": "对话不存在。"}, status_code=404)
+    return JSONResponse(_json_safe(thread))
+
+
+@app.delete("/api/data-agent/threads/{thread_id}")
+async def archive_data_agent_thread(thread_id: str, request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
+    if not WORKSPACES.archive_thread(current, thread_id):
+        return JSONResponse({"error": "对话不存在。"}, status_code=404)
+    return JSONResponse({"archived": True})
+
+
 @app.post("/api/data-agent/query")
-async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
+async def data_agent_query(payload: dict[str, Any], request: Request) -> JSONResponse:
     message = (payload.get("message") or payload.get("task") or "").strip()
     if not message:
         return JSONResponse({"error": "请输入要分析的问题。"}, status_code=400)
-    workspace_id = _workspace_id(payload.get("workspace_id"))
+    workspace_id = _request_workspace(request, payload.get("workspace_id"))
     dataset_id = str(payload.get("dataset_id") or "")
     if not WORKSPACES.get_dataset(workspace_id, dataset_id):
         return JSONResponse({"error": "请先在数据目录上传或选择一个数据集。"}, status_code=409)
@@ -597,12 +705,24 @@ async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
     except KeyError:
         return JSONResponse({"error": "当前数据文件已不可用，请重新上传。"}, status_code=410)
 
-    session_id = payload.get("session_id")
+    thread_id = str(payload.get("thread_id") or "")
+    thread = WORKSPACES.get_thread(workspace_id, thread_id, include_messages=True) if thread_id else None
+    if thread_id and not thread:
+        return JSONResponse({"error": "当前对话不存在或不属于你的工作区。"}, status_code=404)
+    if thread and thread.get("dataset_id") and thread["dataset_id"] != dataset_id:
+        return JSONResponse({"error": "该对话绑定了另一个数据集，请新建对话后分析。"}, status_code=409)
+    if not thread:
+        thread = WORKSPACES.create_thread(workspace_id, dataset_id, message)
+        thread_id = thread["thread_id"]
+    WORKSPACES.append_message(workspace_id, thread_id, "user", message)
+
+    session_id = thread.get("session_id") or payload.get("session_id")
     persisted_session = get_session(session_id) if session_id else None
     if not persisted_session or persisted_session.get("dataset_id") != dataset_id:
         session = create_session(dataset_id=dataset_id, cost_budget=float(payload.get("cost_budget", 10.0)))
         session_id = session["session_id"]
         V4_SESSIONS[session_id] = dataset_id
+    WORKSPACES.bind_thread_session(workspace_id, thread_id, session_id, dataset_id)
     started = time.perf_counter()
     result = run_v4_agent(message, frame, session_id, text=TEXTS.get(dataset_id, ""))
     acquisition = build_agent_trace(
@@ -638,7 +758,9 @@ async def data_agent_query(payload: dict[str, Any]) -> JSONResponse:
         "workflow_summary": _workflow_summary(result.get("analysis_workflow"), result.get("workflow_validation")),
         "data_agent_trace": acquisition,
         "run": run,
+        "thread_id": thread_id,
     }
+    WORKSPACES.append_message(workspace_id, thread_id, "assistant", str(result.get("reply") or "分析完成"), safe)
     return JSONResponse(_json_safe(safe))
 
 
@@ -660,14 +782,14 @@ async def data_agent_repair_demos() -> JSONResponse:
 
 
 @app.get("/api/data-agent/runs")
-async def data_agent_runs(workspace_id: str = "") -> JSONResponse:
-    current = _workspace_id(workspace_id)
+async def data_agent_runs(request: Request, workspace_id: str = "") -> JSONResponse:
+    current = _request_workspace(request, workspace_id)
     return JSONResponse(_json_safe({"runs": WORKSPACES.list_runs(current)}))
 
 
 @app.get("/api/data-agent/runs/{run_id}")
-async def data_agent_run(run_id: str, workspace_id: str = "") -> JSONResponse:
-    run = WORKSPACES.get_run(_workspace_id(workspace_id), run_id)
+async def data_agent_run(run_id: str, request: Request, workspace_id: str = "") -> JSONResponse:
+    run = WORKSPACES.get_run(_request_workspace(request, workspace_id), run_id)
     if not run:
         return JSONResponse({"error": "运行记录不存在。"}, status_code=404)
     return JSONResponse(_json_safe(run))

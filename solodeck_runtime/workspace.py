@@ -22,6 +22,7 @@ class DataWorkspaceRepository:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
         connection.execute("PRAGMA journal_mode=WAL")
         connection.execute("PRAGMA busy_timeout=10000")
         return connection
@@ -63,6 +64,30 @@ class DataWorkspaceRepository:
                 );
                 CREATE INDEX IF NOT EXISTS idx_workspace_runs
                   ON workspace_runs(workspace_id, created_at DESC);
+                CREATE TABLE IF NOT EXISTS workspace_threads (
+                  thread_id TEXT PRIMARY KEY,
+                  workspace_id TEXT NOT NULL,
+                  dataset_id TEXT,
+                  session_id TEXT,
+                  title TEXT NOT NULL,
+                  archived INTEGER NOT NULL DEFAULT 0,
+                  created_at TEXT NOT NULL,
+                  updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_workspace_threads
+                  ON workspace_threads(workspace_id, archived, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS workspace_messages (
+                  message_id TEXT PRIMARY KEY,
+                  thread_id TEXT NOT NULL,
+                  workspace_id TEXT NOT NULL,
+                  role TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  result_json TEXT NOT NULL,
+                  created_at TEXT NOT NULL,
+                  FOREIGN KEY(thread_id) REFERENCES workspace_threads(thread_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_workspace_messages
+                  ON workspace_messages(workspace_id, thread_id, created_at);
                 """
             )
 
@@ -154,6 +179,90 @@ class DataWorkspaceRepository:
             ).fetchone()
         return _run_row(row) if row else None
 
+    def create_thread(self, workspace_id: str, dataset_id: str | None, title: str = "新对话") -> dict[str, Any]:
+        thread_id = f"thread_{uuid4().hex[:18]}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO workspace_threads VALUES (?, ?, ?, NULL, ?, 0, ?, ?)",
+                (thread_id, workspace_id, dataset_id, _thread_title(title), now, now),
+            )
+        return self.get_thread(workspace_id, thread_id, include_messages=True) or {}
+
+    def list_threads(self, workspace_id: str, limit: int = 60) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute(
+                """
+                SELECT t.*, COUNT(m.message_id) AS message_count
+                FROM workspace_threads t LEFT JOIN workspace_messages m ON m.thread_id = t.thread_id
+                WHERE t.workspace_id = ? AND t.archived = 0
+                GROUP BY t.thread_id ORDER BY t.updated_at DESC LIMIT ?
+                """,
+                (workspace_id, max(1, min(limit, 100))),
+            ).fetchall()
+        return [_thread_row(row) for row in rows]
+
+    def get_thread(self, workspace_id: str, thread_id: str, include_messages: bool = False) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT *, 0 AS message_count FROM workspace_threads WHERE workspace_id = ? AND thread_id = ?",
+                (workspace_id, thread_id),
+            ).fetchone()
+            if not row:
+                return None
+            result = _thread_row(row)
+            if include_messages:
+                messages = db.execute(
+                    "SELECT * FROM workspace_messages WHERE workspace_id = ? AND thread_id = ? ORDER BY created_at",
+                    (workspace_id, thread_id),
+                ).fetchall()
+                result["messages"] = [_message_row(item) for item in messages]
+        return result
+
+    def append_message(
+        self,
+        workspace_id: str,
+        thread_id: str,
+        role: str,
+        content: str,
+        result: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if role not in {"user", "assistant"}:
+            raise ValueError("unsupported message role")
+        thread = self.get_thread(workspace_id, thread_id)
+        if not thread:
+            raise KeyError("thread not found")
+        message_id = f"msg_{uuid4().hex[:20]}"
+        now = datetime.now(timezone.utc).isoformat()
+        safe_result = _safe_message_result(result or {})
+        with self._connect() as db:
+            db.execute(
+                "INSERT INTO workspace_messages VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (message_id, thread_id, workspace_id, role, content[:12000], _json(safe_result), now),
+            )
+            title = thread["title"]
+            if role == "user" and title == "新对话":
+                title = _thread_title(content)
+            db.execute("UPDATE workspace_threads SET title = ?, updated_at = ? WHERE thread_id = ?", (title, now, thread_id))
+        return {"message_id": message_id, "thread_id": thread_id, "role": role, "content": content[:12000], "result": safe_result, "created_at": now}
+
+    def bind_thread_session(self, workspace_id: str, thread_id: str, session_id: str, dataset_id: str) -> None:
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE workspace_threads SET session_id = ?, dataset_id = ?, updated_at = ? WHERE workspace_id = ? AND thread_id = ?",
+                (session_id, dataset_id, datetime.now(timezone.utc).isoformat(), workspace_id, thread_id),
+            )
+        if cursor.rowcount != 1:
+            raise KeyError("thread not found")
+
+    def archive_thread(self, workspace_id: str, thread_id: str) -> bool:
+        with self._connect() as db:
+            cursor = db.execute(
+                "UPDATE workspace_threads SET archived = 1, updated_at = ? WHERE workspace_id = ? AND thread_id = ?",
+                (datetime.now(timezone.utc).isoformat(), workspace_id, thread_id),
+            )
+        return cursor.rowcount == 1
+
 
 def profile_dataframe(frame: pd.DataFrame) -> dict[str, Any]:
     numeric = list(frame.select_dtypes(include="number").columns)
@@ -193,6 +302,36 @@ def _run_row(row: sqlite3.Row) -> dict[str, Any]:
         "result_view": json.loads(row["result_view_json"]), "reply": row["reply"],
         "latency_ms": row["latency_ms"], "created_at": row["created_at"],
     }
+
+
+def _thread_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "thread_id": row["thread_id"], "workspace_id": row["workspace_id"],
+        "dataset_id": row["dataset_id"], "session_id": row["session_id"],
+        "title": row["title"], "message_count": int(row["message_count"]),
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+
+
+def _message_row(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "message_id": row["message_id"], "thread_id": row["thread_id"],
+        "role": row["role"], "content": row["content"],
+        "result": json.loads(row["result_json"]), "created_at": row["created_at"],
+    }
+
+
+def _thread_title(value: str) -> str:
+    compact = " ".join(str(value or "").strip().split())
+    return compact[:36] or "新对话"
+
+
+def _safe_message_result(result: dict[str, Any]) -> dict[str, Any]:
+    allowed = {
+        "reply", "user_artifact", "result_view", "validation_report", "evidence_level",
+        "state_id", "task_spec", "workflow_summary", "data_agent_trace", "run",
+    }
+    return {key: result.get(key) for key in allowed if result.get(key) is not None}
 
 
 def _json(value: Any) -> str:

@@ -29,6 +29,8 @@ button { cursor: pointer; }
   transition: transform .22s ease;
   width: 236px;
   z-index: 20;
+  display: flex;
+  flex-direction: column;
 }
 
 .sidebar.collapsed {
@@ -103,6 +105,45 @@ nav button {
 nav button:hover, nav button.active {
   background: rgba(255,255,255,.19);
 }
+
+.thread-section { border-top: 1px solid rgba(255,255,255,.10); margin-top: 16px; min-height: 0; padding-top: 14px; }
+.thread-heading { align-items: center; color: #9eb5ad; display: flex; font-size: 11px; justify-content: space-between; margin: 0 8px 7px; }
+.thread-heading button { align-items: center; background: transparent; border: 0; border-radius: 5px; color: #c9d8d3; display: flex; height: 26px; justify-content: center; width: 26px; }
+.thread-heading button:hover { background: rgba(255,255,255,.09); color: #fff; }
+.thread-list { display: grid; gap: 2px; max-height: min(28vh, 260px); overflow: auto; scrollbar-width: thin; }
+.thread-row { align-items: center; background: transparent; border-radius: 6px; color: #bcd0c9; display: grid; grid-template-columns: minmax(0, 1fr) 28px; min-height: 34px; width: 100%; }
+.thread-open { align-items: center; background: transparent; border: 0; color: inherit; display: grid; font-size: 12px; gap: 7px; grid-template-columns: 15px minmax(0, 1fr); min-height: 34px; padding: 0 2px 0 9px; text-align: left; }
+.thread-open > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-delete { align-items: center; background: transparent; border: 0; border-radius: 4px; color: inherit; display: flex; height: 25px; justify-content: center; opacity: 0; width: 25px; }
+.thread-row:hover, .thread-row.active { background: rgba(255,255,255,.08); color: #fff; }
+.thread-row:hover .thread-delete, .thread-row.active .thread-delete { opacity: .72; }
+.thread-empty { color: #78958b; font-size: 11px; line-height: 1.5; margin: 8px; }
+.account-area { border-top: 1px solid rgba(255,255,255,.11); margin-top: auto; padding-top: 12px; }
+.account-button { align-items: center; background: transparent; border: 0; border-radius: 7px; color: #eaf4f0; display: grid; gap: 8px; grid-template-columns: 30px minmax(0, 1fr) 16px; min-height: 44px; padding: 5px 7px; text-align: left; width: 100%; }
+.account-button:hover { background: rgba(255,255,255,.08); }
+.account-button > span:nth-child(2) { min-width: 0; }
+.account-button strong, .account-button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-button strong { font-size: 12px; }
+.account-button small { color: #88a59b; font-size: 10px; margin-top: 1px; }
+.account-avatar { align-items: center; background: rgba(255,255,255,.10); border-radius: 6px; display: flex; height: 29px; justify-content: center; width: 29px; }
+
+.modal-backdrop { align-items: center; background: rgba(12, 28, 23, .48); display: flex; inset: 0; justify-content: center; padding: 20px; position: fixed; z-index: 100; }
+.auth-modal { background: #fff; border: 1px solid #d8e2dd; border-radius: 8px; box-shadow: 0 28px 70px rgba(9, 31, 25, .24); max-width: 410px; padding: 30px; position: relative; width: 100%; }
+.modal-close { align-items: center; background: transparent; border: 0; color: #66776f; display: flex; height: 34px; justify-content: center; position: absolute; right: 14px; top: 14px; width: 34px; }
+.auth-mark { align-items: center; background: #eaf5f0; border-radius: 7px; display: flex; height: 40px; justify-content: center; width: 40px; }
+.auth-modal h2 { font-size: 24px; margin: 16px 0 5px; }
+.auth-modal > p { color: #66776f; font-size: 13px; margin: 0 0 20px; }
+.auth-tabs { background: #eef3f0; border-radius: 6px; display: grid; grid-template-columns: 1fr 1fr; padding: 3px; }
+.auth-tabs button { background: transparent; border: 0; border-radius: 5px; color: #66776f; min-height: 34px; }
+.auth-tabs button.active { background: #fff; box-shadow: 0 1px 5px rgba(25, 57, 48, .10); color: #183e34; font-weight: 750; }
+.auth-modal form { display: grid; gap: 13px; margin-top: 18px; }
+.auth-modal label { color: #344a42; display: grid; font-size: 12px; font-weight: 700; gap: 6px; }
+.auth-modal input { border: 1px solid #cdd9d4; border-radius: 6px; min-height: 43px; outline: none; padding: 0 12px; }
+.auth-modal input:focus { border-color: #438b74; box-shadow: 0 0 0 3px rgba(67, 139, 116, .10); }
+.auth-submit { align-items: center; background: #153f35; border: 0; border-radius: 6px; color: #fff; display: flex; gap: 7px; justify-content: center; min-height: 43px; margin-top: 3px; }
+.auth-submit:disabled { opacity: .62; }
+.auth-error { background: #fff2f1; border: 1px solid #f4d2ce; border-radius: 5px; color: #a13b31; font-size: 12px; padding: 8px 10px; }
+.auth-modal > small { color: #829189; display: block; font-size: 10px; margin-top: 15px; text-align: center; }
 
 main {
   margin-left: 236px;
