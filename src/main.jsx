@@ -209,6 +209,7 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, workspa
     selected.forEach((file) => form.append("files", file));
     form.append("text", text);
     form.append("workspace_id", workspaceId);
+    if (datasetId) form.append("append_to_dataset_id", datasetId);
     try {
       const res = await fetch("/api/upload", { method: "POST", body: form });
       const data = await parseApiResponse(res);
@@ -218,7 +219,7 @@ function DataIntakePanel({ datasetId, setDatasetId, setMapping, setPage, workspa
       setTasks(data.tasks || []);
       onUploaded?.(data.dataset);
       cache.clear();
-      setNotice("资料已进入分析区，可以直接开始提问。");
+      setNotice(data.appended ? `已补充 ${data.added_rows} 条记录，可以沿用当前对话继续分析。` : "资料已进入分析区，可以直接开始提问。");
       setTimeout(() => setPage?.("chat"), 240);
     } catch (error) {
       setNotice(error.message);

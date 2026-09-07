@@ -71,8 +71,16 @@ def test_api_reuses_thread_session_and_scopes_workspace(tmp_path, monkeypatch):
     frame = pd.DataFrame({"platform": ["小红书", "抖音"], "conversions": [4, 2]})
     api_spa.DATASETS[dataset_id] = frame
 
-    monkeypatch.setattr(api_spa, "create_session", lambda **_: {"session_id": "session_fixed"})
-    monkeypatch.setattr(api_spa, "get_session", lambda session_id: {"session_id": session_id, "dataset_id": dataset_id} if session_id else None)
+    session_state = {}
+    def fake_create_session(**kwargs):
+        session_state.update({"session_id": "session_fixed", "dataset_id": kwargs.get("dataset_id")})
+        return dict(session_state)
+    def fake_update_session(session_id, **fields):
+        session_state.update(fields)
+        return dict(session_state)
+    monkeypatch.setattr(api_spa, "create_session", fake_create_session)
+    monkeypatch.setattr(api_spa, "get_session", lambda session_id: dict(session_state) if session_id and session_state else None)
+    monkeypatch.setattr(api_spa, "update_session", fake_update_session)
     monkeypatch.setattr(api_spa, "build_agent_trace", lambda *args, **kwargs: {"steps": [], "task_spec": {}})
     monkeypatch.setattr(api_spa, "run_v4_agent", lambda message, df, session_id, text="": {
         "session_id": session_id,
@@ -96,9 +104,43 @@ def test_api_reuses_thread_session_and_scopes_workspace(tmp_path, monkeypatch):
     assert workspace["datasets"][0]["dataset_id"] == dataset_id
 
     first = client.post("/api/data-agent/query", json={"dataset_id": dataset_id, "message": "哪个平台更好？"}).json()
+    revised_dataset_id = "dataset_thread_revised"
+    revised_frame = pd.concat([frame, pd.DataFrame({"platform": ["淘宝"], "conversions": [7]})], ignore_index=True)
+    api_spa.DATASETS[revised_dataset_id] = revised_frame
+    repository.register_dataset(user_workspace, revised_dataset_id, "orders-updated.csv", "增量补充", tmp_path / "orders-updated.csv", revised_frame)
     second = client.post("/api/data-agent/query", json={
-        "dataset_id": dataset_id, "thread_id": first["thread_id"], "message": "继续看成交数",
+        "dataset_id": revised_dataset_id, "thread_id": first["thread_id"], "message": "结合新数据继续看成交数",
     }).json()
     assert second["session_id"] == first["session_id"] == "session_fixed"
+    assert session_state["dataset_id"] == revised_dataset_id
+    assert session_state["data_revision"] == 1
     thread = client.get(f"/api/data-agent/threads/{first['thread_id']}").json()
     assert [item["role"] for item in thread["messages"]] == ["user", "assistant", "user", "assistant"]
+
+
+def test_upload_can_append_rows_to_current_dataset(tmp_path, monkeypatch):
+    repository = DataWorkspaceRepository(tmp_path / "workspace.db")
+    monkeypatch.setattr(api_spa, "WORKSPACES", repository)
+    workspace_id = "workspace_append"
+    base_id = "dataset_base_rows"
+    base = pd.DataFrame({"platform": ["小红书", "抖音"], "conversions": [4, 2]})
+    api_spa.DATASETS[base_id] = base
+    repository.register_dataset(workspace_id, base_id, "orders.csv", "文件上传", tmp_path / "orders.csv", base)
+    monkeypatch.setattr(api_spa, "_persist_runtime_dataset", lambda *args, **kwargs: None)
+    monkeypatch.setattr(api_spa, "_runtime_dataset_path", lambda dataset_id: tmp_path / f"{dataset_id}.csv")
+    monkeypatch.setattr(api_spa, "_run", lambda dataset_id, question_id="pain_point_title": {
+        "dataset_id": dataset_id, "mapping": {}, "trace": [],
+    })
+
+    response = TestClient(api_spa.app).post(
+        "/api/upload",
+        data={"workspace_id": workspace_id, "append_to_dataset_id": base_id},
+        files={"files": ("more.csv", b"platform,conversions\nTaobao,7\n", "text/csv")},
+    )
+    payload = response.json()
+
+    assert response.status_code == 200
+    assert payload["appended"] is True
+    assert payload["added_rows"] == 1
+    assert len(api_spa.DATASETS[payload["dataset_id"]]) == 3
+    assert payload["dataset"]["row_count"] == 3

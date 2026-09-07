@@ -38,7 +38,7 @@ from solodeck.workflows.data_agent_graph import run_data_agent_graph
 from solodeck_v3.workflows.data_agent_graph import run_v3_data_agent
 from solodeck_v4.runtime.runner import create_session, run_v4_agent
 from solodeck_v4.tools.registry import list_tools
-from solodeck_v4.session.store import get_session
+from solodeck_v4.session.store import get_session, update_session
 from solodeck_runtime.workspace import DataWorkspaceRepository
 from solodeck_runtime.data_agent import build_agent_trace
 from solodeck_runtime.sources import DataFrameSourceAdapter
@@ -330,6 +330,7 @@ async def upload(
     files: list[UploadFile] = File(default=[]),
     text: str = Form(default=""),
     workspace_id: str = Form(default=""),
+    append_to_dataset_id: str = Form(default=""),
 ) -> JSONResponse:
     frames = []
     notes = []
@@ -383,7 +384,22 @@ async def upload(
         frames.append(text_frame)
     if not frames:
         return JSONResponse({"error": "没有可读取的 CSV、Excel、ZIP、图片截图或文字。", "notes": notes}, status_code=400)
-    df = pd.concat(frames, ignore_index=True, sort=False)
+    incoming_df = pd.concat(frames, ignore_index=True, sort=False)
+    current_workspace = _request_workspace(request, workspace_id)
+    append_target = append_to_dataset_id.strip()
+    appended_from: dict[str, Any] | None = None
+    if append_target:
+        appended_from = WORKSPACES.get_dataset(current_workspace, append_target)
+        if not appended_from:
+            return JSONResponse({"error": "要补充的数据集不存在或不属于当前工作区。"}, status_code=404)
+        try:
+            _, existing_df = _get_df(append_target)
+        except KeyError:
+            return JSONResponse({"error": "原数据文件已不可用，请重新上传完整资料。"}, status_code=410)
+        df = pd.concat([existing_df, incoming_df], ignore_index=True, sort=False)
+        notes.append(f"已在当前数据的 {len(existing_df)} 条记录后补充 {len(incoming_df)} 条新记录。")
+    else:
+        df = incoming_df
     did = dataset_fingerprint(df)
     DATASETS[did] = df
     TEXTS[did] = full_text
@@ -397,10 +413,10 @@ async def upload(
     TEXTS[final_did] = full_text
     _persist_runtime_dataset(final_did, df, full_text)
     dataset = WORKSPACES.register_dataset(
-        _request_workspace(request, workspace_id),
+        current_workspace,
         final_did,
-        "、".join(source_names[:3]) if source_names else "粘贴文本",
-        "文件上传" if source_names else "文本输入",
+        f"{appended_from['name']}（已更新）" if appended_from else ("、".join(source_names[:3]) if source_names else "粘贴文本"),
+        "增量补充" if appended_from else ("文件上传" if source_names else "文本输入"),
         _runtime_dataset_path(final_did) or "",
         df,
         result.get("mapping") or {},
@@ -411,6 +427,9 @@ async def upload(
         "mapping": result["mapping"],
         "notes": notes,
         "tasks": extracted_tasks,
+        "appended": bool(appended_from),
+        "previous_dataset_id": append_target or None,
+        "added_rows": len(incoming_df),
         "trace": result["trace"][:1],
     }
     return JSONResponse(_json_safe(payload))
@@ -709,8 +728,6 @@ async def data_agent_query(payload: dict[str, Any], request: Request) -> JSONRes
     thread = WORKSPACES.get_thread(workspace_id, thread_id, include_messages=True) if thread_id else None
     if thread_id and not thread:
         return JSONResponse({"error": "当前对话不存在或不属于你的工作区。"}, status_code=404)
-    if thread and thread.get("dataset_id") and thread["dataset_id"] != dataset_id:
-        return JSONResponse({"error": "该对话绑定了另一个数据集，请新建对话后分析。"}, status_code=409)
     if not thread:
         thread = WORKSPACES.create_thread(workspace_id, dataset_id, message)
         thread_id = thread["thread_id"]
@@ -718,6 +735,15 @@ async def data_agent_query(payload: dict[str, Any], request: Request) -> JSONRes
 
     session_id = thread.get("session_id") or payload.get("session_id")
     persisted_session = get_session(session_id) if session_id else None
+    if persisted_session and persisted_session.get("dataset_id") != dataset_id:
+        persisted_session = update_session(
+            session_id,
+            dataset_id=dataset_id,
+            artifact_cache={},
+            last_task_spec=None,
+            last_state_id=None,
+            data_revision=int(persisted_session.get("data_revision", 0)) + 1,
+        )
     if not persisted_session or persisted_session.get("dataset_id") != dataset_id:
         session = create_session(dataset_id=dataset_id, cost_budget=float(payload.get("cost_budget", 10.0)))
         session_id = session["session_id"]
